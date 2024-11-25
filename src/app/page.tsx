@@ -6,6 +6,7 @@ import { DeviceList } from "../components/DeviceList";
 import { FileUpload } from "../components/FileUpload";
 import { TransferProgress } from "../components/TransferProgress";
 import Image from "next/image";
+import { RoomJoin } from "@/components/RoomJoin";
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
 
@@ -15,6 +16,9 @@ const App: React.FC = () => {
   const [transfers, setTransfers] = useState<FileTransfer[]>([]);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [selfName, setSelfName] = useState<string | null>(null);
+  // Add these new states
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomError, setRoomError] = useState<string | null>(null);
 
   const generateUUID = (): string => {
     if ("randomUUID" in crypto) {
@@ -27,6 +31,28 @@ const App: React.FC = () => {
           (crypto.getRandomValues(new Uint8Array(1))[0] &
             (15 >> (parseInt(c, 10) / 4)))
         ).toString(16),
+      );
+    }
+  };
+
+  // Add this after the websocket connection setup
+  const handleCreateRoom = () => {
+    if (ws) {
+      ws.send(
+        JSON.stringify({
+          type: "create-room",
+        }),
+      );
+    }
+  };
+
+  const handleJoinRoom = (id: string) => {
+    if (ws) {
+      ws.send(
+        JSON.stringify({
+          type: "join-room",
+          roomId: id,
+        }),
       );
     }
   };
@@ -153,6 +179,17 @@ const App: React.FC = () => {
     websocket.onmessage = (event) => {
       const data = JSON.parse(event.data);
       switch (data.type) {
+        case "room-created":
+          setRoomId(data.roomId);
+          setRoomError(null);
+          break;
+        case "room-joined":
+          setRoomId(data.roomId);
+          setRoomError(null);
+          break;
+        case "room-error":
+          setRoomError(data.message);
+          break;
         case "self-identity":
           // Set the user's assigned name
           setSelfName(data.name);
@@ -287,7 +324,7 @@ const App: React.FC = () => {
             priority={true}
             width={512}
             height={512}
-            className="3xl:w-72 mt-2 w-32 sm:w-32 md:w-44 lg:w-52 xl:w-60 2xl:w-64"
+            className="mt-2 w-32 sm:w-32 md:w-44 lg:w-52 xl:w-60 2xl:w-64 3xl:w-72"
             src="/Logo.webp"
             alt="BlinkSend Logo"
           />
@@ -302,37 +339,52 @@ const App: React.FC = () => {
               </span>
             )}
           </p>
+          {roomId && <p className="text-sm text-blue-500">Room ID: {roomId}</p>}
         </header>
 
-        <section className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">
-            Available Devices
-          </h2>
-          <DeviceList
-            devices={devices}
-            selectedDevice={selectedDevice}
-            onDeviceSelect={setSelectedDevice}
+        {!roomId ? (
+          <RoomJoin
+            onCreateRoom={handleCreateRoom}
+            onJoinRoom={handleJoinRoom}
           />
-        </section>
+        ) : (
+          <>
+            <section className="mb-8">
+              <h2 className="mb-4 text-xl font-semibold text-gray-900">
+                Available Devices
+              </h2>
+              <DeviceList
+                devices={devices}
+                selectedDevice={selectedDevice}
+                onDeviceSelect={setSelectedDevice}
+              />
+            </section>
 
-        <section className="mb-8">
-          <FileUpload
-            onFileSelect={handleFileSelect}
-            disabled={!selectedDevice}
-          />
-        </section>
+            <section className="mb-8">
+              <FileUpload
+                onFileSelect={handleFileSelect}
+                disabled={!selectedDevice}
+              />
+            </section>
 
-        {transfers.length > 0 && (
-          <section>
-            <h2 className="mb-4 text-xl font-semibold text-gray-900">
-              Transfers
-            </h2>
-            <div className="space-y-4">
-              {transfers.map((transfer) => (
-                <TransferProgress key={transfer.id} transfer={transfer} />
-              ))}
-            </div>
-          </section>
+            {transfers.length > 0 && (
+              <section>
+                <h2 className="mb-4 text-xl font-semibold text-gray-900">
+                  Transfers
+                </h2>
+                <div className="space-y-4">
+                  {transfers.map((transfer) => (
+                    <TransferProgress key={transfer.id} transfer={transfer} />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+        {roomError && (
+          <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600">
+            {roomError}
+          </div>
         )}
       </div>
     </div>
