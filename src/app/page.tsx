@@ -324,7 +324,7 @@ const App: React.FC = () => {
             priority={true}
             width={512}
             height={512}
-            className="mt-2 w-32 sm:w-32 md:w-44 lg:w-52 xl:w-60 2xl:w-64 3xl:w-72"
+            className="mt-2 w-48 sm:w-48 md:w-48 lg:w-52 xl:w-60 2xl:w-64 3xl:w-72"
             src="/Logo.webp"
             alt="BlinkSend Logo"
           />
@@ -339,7 +339,25 @@ const App: React.FC = () => {
               </span>
             )}
           </p>
-          {roomId && <p className="text-sm text-blue-500">Room ID: {roomId}</p>}
+          {roomId && (
+            <p className="mt-2 flex items-center text-sm font-semibold text-cyan-700">
+              <svg
+                className="mr-1 h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M12 20.5a8.5 8.5 0 100-17 8.5 8.5 0 000 17z"
+                ></path>
+              </svg>
+              Room ID: {roomId}
+            </p>
+          )}
         </header>
 
         {!roomId ? (
