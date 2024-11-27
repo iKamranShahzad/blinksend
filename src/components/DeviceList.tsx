@@ -20,12 +20,16 @@ export const DeviceList: React.FC<DeviceListProps> = ({
           onClick={() => onDeviceSelect(device)}
           className={`rounded-lg border p-4 text-left transition-colors ${
             selectedDevice?.id === device.id
-              ? "border-blue-500 bg-blue-50"
-              : "border-gray-200 hover:border-blue-200"
+              ? "border-blue-500 bg-blue-50 hover:border-blue-700 dark:border-violet-500 dark:bg-neutral-900 dark:hover:border-violet-700"
+              : "border-gray-400 bg-white hover:border-blue-400 dark:bg-zinc-800 dark:hover:border-violet-400"
           }`}
         >
-          <div className="font-medium text-gray-900">{device.name}</div>
-          <div className="text-sm text-gray-500">{device.type}</div>
+          <div className="font-medium text-gray-900 dark:text-gray-300">
+            {device.name}
+          </div>
+          <div className="text-sm text-gray-500 dark:text-gray-100">
+            {device.type}
+          </div>
         </button>
       ))}
     </div>

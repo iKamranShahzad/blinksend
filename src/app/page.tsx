@@ -7,6 +7,7 @@ import { FileUpload } from "../components/FileUpload";
 import { TransferProgress } from "../components/TransferProgress";
 import Image from "next/image";
 import { RoomJoin } from "@/components/RoomJoin";
+import { Sun, Moon } from "lucide-react";
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
 
@@ -19,6 +20,25 @@ const App: React.FC = () => {
   // Add these new states
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
+  const [theme, setTheme] = useState("light");
+
+  useEffect(() => {
+    // Check local storage for theme preference
+    const storedTheme = localStorage.getItem("theme");
+    if (storedTheme) {
+      setTheme(storedTheme);
+      document.documentElement.classList.add(storedTheme);
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const newTheme = theme === "light" ? "dark" : "light";
+
+    document.documentElement.classList.remove(theme);
+    document.documentElement.classList.add(newTheme);
+    setTheme(newTheme);
+    localStorage.setItem("theme", newTheme);
+  };
 
   const generateUUID = (): string => {
     if ("randomUUID" in crypto) {
@@ -317,99 +337,108 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="mx-auto max-w-4xl px-4">
-        <header className="relative z-10 mb-8 flex flex-col items-center justify-center gap-1">
-          <Image
-            priority={true}
-            width={512}
-            height={512}
-            className="mt-2 w-48 sm:w-48 md:w-48 lg:w-52 xl:w-60 2xl:w-64 3xl:w-72"
-            src="/Logo.webp"
-            alt="BlinkSend Logo"
-          />
-          <p className="text-center text-gray-600">
-            Share files securely with devices on your browser
-          </p>
-          <p className="mt-2 text-sm text-gray-500">
-            You&nbsp;re being discovered by the name <strong>{selfName}</strong>{" "}
-            {selfName === null && (
-              <span className="loader">
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-              </span>
-            )}
-          </p>
-          {roomId && (
-            <p className="mt-2 flex items-center text-sm font-semibold text-cyan-700">
-              <svg
-                className="mr-1 h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M13 16h-1v-4h-1m1-4h.01M12 20.5a8.5 8.5 0 100-17 8.5 8.5 0 000 17z"
-                ></path>
-              </svg>
-              Room ID: {roomId}
+    <div>
+      <button
+        onClick={toggleTheme}
+        className="fixed bottom-4 right-4 z-50 rounded-full bg-gray-200 p-2 shadow-md sm:bottom-auto sm:right-4 sm:top-4 dark:bg-zinc-600"
+      >
+        {theme === "light" ? <Sun /> : <Moon />}
+      </button>
+      <div className="min-h-screen bg-gray-50 py-8 dark:bg-zinc-900">
+        <div className="mx-auto max-w-4xl px-4">
+          <header className="relative z-10 mb-8 flex flex-col items-center justify-center gap-1">
+            <Image
+              priority={true}
+              width={512}
+              height={512}
+              className="mt-2 w-48"
+              src={theme === "light" ? "/Logo.webp" : "/LogoDark.webp"}
+              alt="BlinkSend Logo"
+            />
+            <p className="text-center text-gray-600 dark:text-neutral-300">
+              Share files securely with devices on your browser
             </p>
-          )}
-        </header>
-
-        {!roomId ? (
-          <RoomJoin
-            onCreateRoom={handleCreateRoom}
-            onJoinRoom={handleJoinRoom}
-          />
-        ) : (
-          <>
-            <section className="mb-8">
-              <h2 className="mb-4 text-xl font-semibold text-gray-900">
-                Available Devices
-              </h2>
-              <DeviceList
-                devices={devices}
-                selectedDevice={selectedDevice}
-                onDeviceSelect={setSelectedDevice}
-              />
-            </section>
-
-            <section className="mb-8">
-              <FileUpload
-                onFileSelect={handleFileSelect}
-                disabled={!selectedDevice}
-              />
-            </section>
-
-            {transfers.length > 0 && (
-              <section>
-                <h2 className="mb-4 text-xl font-semibold text-gray-900">
-                  Transfers
-                </h2>
-                <div
-                  className="max-h-72 space-y-2 lg:max-h-44"
-                  style={{
-                    scrollbarWidth: "none",
-                    overflowY: "auto",
-                  }}
+            <p className="mt-2 text-sm text-gray-500 dark:text-neutral-400">
+              You&nbsp;re being discovered by the name{" "}
+              <strong>{selfName}</strong>{" "}
+              {selfName === null && (
+                <span className="loader">
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                </span>
+              )}
+            </p>
+            {roomId && (
+              <p className="mt-2 flex items-center text-sm font-semibold text-cyan-700">
+                <svg
+                  className="mr-1 h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
                 >
-                  {transfers.map((transfer) => (
-                    <TransferProgress key={transfer.id} transfer={transfer} />
-                  ))}
-                </div>
-              </section>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M13 16h-1v-4h-1m1-4h.01M12 20.5a8.5 8.5 0 100-17 8.5 8.5 0 000 17z"
+                  ></path>
+                </svg>
+                Room ID: {roomId}
+              </p>
             )}
-          </>
-        )}
-        {roomError && (
-          <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600">
-            {roomError}
-          </div>
-        )}
+          </header>
+
+          {!roomId ? (
+            <RoomJoin
+              onCreateRoom={handleCreateRoom}
+              onJoinRoom={handleJoinRoom}
+            />
+          ) : (
+            <>
+              <section className="mb-8">
+                <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-300">
+                  Available Devices
+                </h2>
+                <DeviceList
+                  devices={devices}
+                  selectedDevice={selectedDevice}
+                  onDeviceSelect={setSelectedDevice}
+                />
+              </section>
+
+              <section className="mb-8">
+                <FileUpload
+                  onFileSelect={handleFileSelect}
+                  disabled={!selectedDevice}
+                />
+              </section>
+
+              {transfers.length > 0 && (
+                <section>
+                  <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-300">
+                    Transfers
+                  </h2>
+                  <div
+                    className="max-h-72 space-y-2 lg:max-h-44"
+                    style={{
+                      scrollbarWidth: "none",
+                      overflowY: "auto",
+                    }}
+                  >
+                    {transfers.map((transfer) => (
+                      <TransferProgress key={transfer.id} transfer={transfer} />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
+          {roomError && (
+            <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600">
+              {roomError}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

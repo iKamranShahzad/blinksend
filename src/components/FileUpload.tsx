@@ -38,8 +38,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         disabled={disabled}
         className={`rounded-lg px-4 py-2 text-white ${
           disabled
-            ? "bg-gray-300"
-            : "bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
+            ? "cursor-not-allowed bg-gray-300 dark:bg-zinc-400 dark:text-black"
+            : "bg-blue-500 font-semibold hover:bg-blue-600 active:bg-blue-700 dark:bg-violet-500 dark:text-zinc-950 dark:hover:bg-violet-600 dark:active:bg-violet-600"
         }`}
       >
         {disabled ? "Select a device first" : "Choose File to Send"}

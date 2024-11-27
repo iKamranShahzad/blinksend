@@ -17,11 +17,13 @@ export const TransferProgress: React.FC<TransferProgressProps> = ({
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 p-4">
+    <div className="rounded-lg border border-gray-200 p-4 dark:border-zinc-700">
       <div className="mb-2 flex items-center justify-between">
         <div>
-          <div className="font-medium text-gray-900">{transfer.fileName}</div>
-          <div className="text-sm text-gray-500">
+          <div className="font-medium text-gray-900 dark:text-gray-300">
+            {transfer.fileName}
+          </div>
+          <div className="text-sm text-gray-500 dark:text-gray-100">
             {formatFileSize(transfer.fileSize)}
           </div>
         </div>
