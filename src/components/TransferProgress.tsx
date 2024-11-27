@@ -30,8 +30,8 @@ export const TransferProgress: React.FC<TransferProgressProps> = ({
             transfer.status === "completed"
               ? "text-green-500"
               : transfer.status === "error"
-              ? "text-red-500"
-              : "text-blue-500"
+                ? "text-red-500"
+                : "text-blue-500"
           }`}
         >
           {transfer.status.charAt(0).toUpperCase() + transfer.status.slice(1)}
@@ -43,8 +43,8 @@ export const TransferProgress: React.FC<TransferProgressProps> = ({
             transfer.status === "completed"
               ? "bg-green-500"
               : transfer.status === "error"
-              ? "bg-red-500"
-              : "bg-blue-500"
+                ? "bg-red-500"
+                : "bg-blue-500"
           }`}
           style={{ width: `${transfer.progress}%` }}
         />

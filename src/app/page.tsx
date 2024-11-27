@@ -372,7 +372,13 @@ const App: React.FC = () => {
                 <h2 className="mb-4 text-xl font-semibold text-gray-900">
                   Transfers
                 </h2>
-                <div className="space-y-4">
+                <div
+                  className="max-h-72 space-y-2 lg:max-h-44"
+                  style={{
+                    scrollbarWidth: "none",
+                    overflowY: "auto",
+                  }}
+                >
                   {transfers.map((transfer) => (
                     <TransferProgress key={transfer.id} transfer={transfer} />
                   ))}
