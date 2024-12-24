@@ -25,7 +25,7 @@ export const RoomJoin: React.FC<RoomJoinProps> = ({
 
   return (
     <div className="flex flex-col items-center justify-center gap-8 p-6 sm:flex-row">
-      <div className="flex w-full flex-col items-center rounded-lg border border-gray-200 bg-white p-6 text-center shadow-lg transition-shadow hover:shadow-xl sm:w-1/2 dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="flex w-full flex-col items-center rounded-lg border border-gray-200 bg-white p-6 text-center shadow-lg transition-shadow hover:shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:w-1/2">
         <h3 className="mb-2 text-lg font-semibold text-gray-800 dark:text-gray-300">
           Create a New Room
         </h3>
@@ -43,7 +43,7 @@ export const RoomJoin: React.FC<RoomJoinProps> = ({
         </button>
       </div>
 
-      <div className="flex w-full flex-col items-center rounded-lg border border-gray-200 bg-white p-6 text-center shadow-lg transition-shadow hover:shadow-xl sm:w-1/2 dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="flex w-full flex-col items-center rounded-lg border border-gray-200 bg-white p-6 text-center shadow-lg transition-shadow hover:shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:w-1/2">
         <h3 className="mb-4 text-lg font-semibold text-gray-800 dark:text-gray-300">
           Join an Existing Room
         </h3>
@@ -71,7 +71,6 @@ export const RoomJoin: React.FC<RoomJoinProps> = ({
         </form>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600 sm:w-1/2">
           {error}

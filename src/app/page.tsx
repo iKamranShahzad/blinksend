@@ -17,13 +17,11 @@ const App: React.FC = () => {
   const [transfers, setTransfers] = useState<FileTransfer[]>([]);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [selfName, setSelfName] = useState<string | null>(null);
-  // Add these new states
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [theme, setTheme] = useState("light");
 
   useEffect(() => {
-    // Check local storage for theme preference
     const storedTheme = localStorage.getItem("theme");
     if (storedTheme) {
       setTheme(storedTheme);
@@ -44,7 +42,6 @@ const App: React.FC = () => {
     if ("randomUUID" in crypto) {
       return crypto.randomUUID();
     } else {
-      // Fallback UUID generation
       return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
         (
           parseInt(c, 10) ^
@@ -55,7 +52,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Add this after the websocket connection setup
   const handleCreateRoom = () => {
     if (ws) {
       ws.send(
@@ -100,14 +96,14 @@ const App: React.FC = () => {
           incomingTransfers.set(transfer.id, receiver);
         }
 
-        // Store the received chunk
+        // Storing the received chunk
         receiver.receivedChunks.set(
           transfer.currentChunk,
           new Uint8Array(chunk),
         );
         receiver.receivedCount++;
 
-        // Update progress
+        // Updating the progress
         const progress = Math.round(
           (receiver.receivedCount / receiver.totalChunks) * 100,
         );
@@ -150,14 +146,14 @@ const App: React.FC = () => {
           const fileBuffer = new Blob(orderedChunks);
           const url = URL.createObjectURL(fileBuffer);
 
-          // Trigger download
+          // this is to trigger download
           const a = document.createElement("a");
           a.href = url;
           a.download = receiver.fileName;
           a.click();
           URL.revokeObjectURL(url);
 
-          // Update transfer status
+          // and this is to Update the transfer status
           setTransfers((prev) =>
             prev.map((t) =>
               t.id === transfer.id
@@ -166,7 +162,7 @@ const App: React.FC = () => {
             ),
           );
 
-          // Clean up
+          // jussst cleanin up those transfers
           incomingTransfers.delete(transfer.id);
         }
       }
@@ -211,7 +207,6 @@ const App: React.FC = () => {
           setRoomError(data.message);
           break;
         case "self-identity":
-          // Set the user's assigned name
           setSelfName(data.name);
           break;
         case "devices":
@@ -225,7 +220,7 @@ const App: React.FC = () => {
           );
           break;
         case "file-received": {
-          // Handle received file
+          // Handle received file (pretty cheeky)
           const { fileName, fileData } = data;
           const blob = new Blob([new Uint8Array(fileData)]);
           const url = URL.createObjectURL(blob);
@@ -248,7 +243,7 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const WINDOW_SIZE = 5; // Number of chunks to send before waiting for acknowledgments
+  const WINDOW_SIZE = 5; // Number of chunks to send before waiting for acknowledgments (i guess 5 is good, idk)
 
   const handleFileSelect = (file: File) => {
     if (!selectedDevice || !ws) return;
@@ -332,7 +327,7 @@ const App: React.FC = () => {
 
     ws.addEventListener("message", onMessage);
 
-    // Start sending chunks
+    // TIME TO SEND THOSEEEEEEE CHUNKSS
     sendChunks();
   };
 
@@ -340,7 +335,7 @@ const App: React.FC = () => {
     <div>
       <button
         onClick={toggleTheme}
-        className="fixed bottom-4 right-4 z-50 rounded-full bg-gray-200 p-2 shadow-md sm:bottom-auto sm:right-4 sm:top-4 dark:bg-zinc-600"
+        className="fixed bottom-4 right-4 z-50 rounded-full bg-gray-200 p-2 shadow-md dark:bg-zinc-600 sm:bottom-auto sm:right-4 sm:top-4"
       >
         {theme === "light" ? <Sun /> : <Moon />}
       </button>
@@ -359,7 +354,7 @@ const App: React.FC = () => {
               Share files securely with devices on your browser
             </p>
             <p className="mt-2 text-sm text-gray-500 dark:text-neutral-400">
-              You&nbsp;re being discovered by the name{" "}
+              You&apos;re being discovered by the name{" "}
               <strong>{selfName}</strong>{" "}
               {selfName === null && (
                 <span className="loader">
