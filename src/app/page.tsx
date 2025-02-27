@@ -79,97 +79,128 @@ const App: React.FC = () => {
     const incomingTransfers = new Map<string, FileTransferReceiver>();
 
     const onMessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
+      try {
+        const data = JSON.parse(event.data);
 
-      if (data.type === "file-chunk") {
-        const { transfer, chunk } = data;
-        let receiver = incomingTransfers.get(transfer.id);
+        if (data.type === "file-chunk") {
+          const { transfer, chunk } = data;
+          let receiver = incomingTransfers.get(transfer.id);
 
-        if (!receiver) {
-          receiver = {
-            fileName: transfer.fileName,
-            fileSize: transfer.fileSize,
-            totalChunks: transfer.totalChunks,
-            receivedChunks: new Map<number, Uint8Array>(),
-            receivedCount: 0,
-          };
-          incomingTransfers.set(transfer.id, receiver);
-        }
-
-        // Storing the received chunk
-        receiver.receivedChunks.set(
-          transfer.currentChunk,
-          new Uint8Array(chunk),
-        );
-        receiver.receivedCount++;
-
-        // Updating the progress
-        const progress = Math.round(
-          (receiver.receivedCount / receiver.totalChunks) * 100,
-        );
-        setTransfers((prev) => {
-          const existingTransfer = prev.find((t) => t.id === transfer.id);
-          if (existingTransfer) {
-            return prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress, status: "receiving" }
-                : t,
-            );
-          } else {
-            return [
-              ...prev,
-              {
-                id: transfer.id,
-                fileName: transfer.fileName,
-                fileSize: transfer.fileSize,
-                progress,
-                status: "receiving",
-              },
-            ];
-          }
-        });
-
-        // If all chunks are received, assemble and save the file
-        if (receiver.receivedCount === receiver.totalChunks) {
-          const orderedChunks: Uint8Array[] = [];
-          for (let i = 0; i < receiver.totalChunks; i++) {
-            const chunkData = receiver.receivedChunks.get(i);
-            if (chunkData) {
-              orderedChunks.push(chunkData);
-            } else {
-              console.error(`Missing chunk ${i} for transfer ${transfer.id}`);
-              return;
-            }
+          if (!receiver) {
+            receiver = {
+              fileName: transfer.fileName,
+              fileSize: transfer.fileSize,
+              totalChunks: transfer.totalChunks,
+              receivedChunks: new Map<number, Uint8Array>(),
+              receivedCount: 0,
+            };
+            incomingTransfers.set(transfer.id, receiver);
           }
 
-          // Concatenate all chunks into one
-          const fileBuffer = new Blob(orderedChunks);
-          const url = URL.createObjectURL(fileBuffer);
-
-          // this is to trigger download
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = receiver.fileName;
-          a.click();
-          URL.revokeObjectURL(url);
-
-          // and this is to Update the transfer status
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress: 100, status: "completed" }
-                : t,
-            ),
+          // Store the chunk and update progress
+          receiver.receivedChunks.set(
+            transfer.currentChunk,
+            new Uint8Array(chunk),
           );
+          receiver.receivedCount++;
 
-          // jussst cleanin up those transfers
-          incomingTransfers.delete(transfer.id);
+          // Throttle UI updates
+          if (
+            receiver.receivedCount % 5 === 0 ||
+            receiver.receivedCount === receiver.totalChunks ||
+            receiver.receivedCount === 1
+          ) {
+            const progress = Math.round(
+              (receiver.receivedCount / receiver.totalChunks) * 100,
+            );
+
+            setTransfers((prev) => {
+              const existingTransfer = prev.find((t) => t.id === transfer.id);
+              if (existingTransfer) {
+                return prev.map((t) =>
+                  t.id === transfer.id
+                    ? { ...t, progress, status: "receiving" }
+                    : t,
+                );
+              } else {
+                return [
+                  ...prev,
+                  {
+                    id: transfer.id,
+                    fileName: transfer.fileName,
+                    fileSize: transfer.fileSize,
+                    progress,
+                    status: "receiving",
+                  },
+                ];
+              }
+            });
+          }
+
+          // If all chunks are received, assemble and save the file
+          if (receiver.receivedCount === receiver.totalChunks) {
+            assembleAndSaveFile(transfer.id, receiver);
+            // Clean up
+            incomingTransfers.delete(transfer.id);
+          }
         }
+      } catch (error) {
+        console.error("Error processing incoming file chunk:", error);
+      }
+    };
+
+    // Separate function to assemble file to help with memory management
+    const assembleAndSaveFile = (
+      transferId: string,
+      receiver: FileTransferReceiver,
+    ) => {
+      try {
+        const orderedChunks: Uint8Array[] = [];
+
+        // Process chunks in order
+        for (let i = 0; i < receiver.totalChunks; i++) {
+          const chunkData = receiver.receivedChunks.get(i);
+          if (chunkData) {
+            orderedChunks.push(chunkData);
+            // Clear the reference as we go to help GC
+            receiver.receivedChunks.delete(i);
+          } else {
+            console.error(`Missing chunk ${i} for transfer ${transferId}`);
+            return;
+          }
+        }
+
+        // Create blob and download
+        const fileBuffer = new Blob(orderedChunks);
+        const url = URL.createObjectURL(fileBuffer);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = receiver.fileName;
+        a.click();
+
+        // Clean up
+        URL.revokeObjectURL(url);
+
+        // Update transfer status
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId
+              ? { ...t, progress: 100, status: "completed" }
+              : t,
+          ),
+        );
+      } catch (error) {
+        console.error("Error assembling file:", error);
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId ? { ...t, status: "error" } : t,
+          ),
+        );
       }
     };
 
     ws.addEventListener("message", onMessage);
-
     return () => {
       ws.removeEventListener("message", onMessage);
     };
@@ -256,15 +287,25 @@ const App: React.FC = () => {
       status: "pending",
     };
 
+    // Create smaller chunks for large files
+    const adaptiveChunkSize =
+      file.size > 100 * 1024 * 1024
+        ? 512 * 1024 // 512KB for large files
+        : CHUNK_SIZE; // Default 1MB for smaller files
+
     setTransfers((prev) => [...prev, transfer]);
 
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const totalChunks = Math.ceil(file.size / adaptiveChunkSize);
     let currentChunk = 0;
     const acknowledgedChunks = new Set<number>();
 
+    // Use a smaller window size for large files to reduce memory pressure
+    const adaptiveWindowSize = file.size > 50 * 1024 * 1024 ? 2 : WINDOW_SIZE;
+
     const sendChunks = () => {
+      // Limit concurrent chunks based on file size
       while (
-        currentChunk - acknowledgedChunks.size < WINDOW_SIZE &&
+        currentChunk - acknowledgedChunks.size < adaptiveWindowSize &&
         currentChunk < totalChunks
       ) {
         sendChunk(currentChunk);
@@ -273,61 +314,80 @@ const App: React.FC = () => {
     };
 
     const sendChunk = async (chunkIndex: number) => {
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const start = chunkIndex * adaptiveChunkSize;
+      const end = Math.min(start + adaptiveChunkSize, file.size);
       const chunk = file.slice(start, end);
-      const buffer = await chunk.arrayBuffer();
 
-      ws.send(
-        JSON.stringify({
-          type: "file-transfer",
-          transfer: {
-            id: transfer.id,
-            fileName: transfer.fileName,
-            fileSize: transfer.fileSize,
-            currentChunk: chunkIndex,
-            totalChunks,
-          },
-          targetDevice: selectedDevice.id,
-          chunk: Array.from(new Uint8Array(buffer)),
-        }),
-      );
+      try {
+        let buffer: ArrayBuffer | null = await chunk.arrayBuffer();
+        let uint8Array: Uint8Array | null = new Uint8Array(buffer);
+
+        // Send chunk with minimal metadata
+        ws.send(
+          JSON.stringify({
+            type: "file-transfer",
+            transfer: {
+              id: transfer.id,
+              fileName: transfer.fileName,
+              fileSize: transfer.fileSize,
+              currentChunk: chunkIndex,
+              totalChunks,
+            },
+            targetDevice: selectedDevice.id,
+            chunk: Array.from(uint8Array),
+          }),
+        );
+
+        // Help garbage collection
+        buffer = null;
+        uint8Array = null;
+      } catch (error) {
+        console.error("Error sending chunk:", error);
+      }
     };
 
+    // Add delay between processing acknowledgments to reduce CPU load
     const onMessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-      if (data.type === "chunk-received" && data.transferId === transfer.id) {
-        acknowledgedChunks.add(data.chunkIndex);
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "chunk-received" && data.transferId === transfer.id) {
+          acknowledgedChunks.add(data.chunkIndex);
 
-        const progress = Math.round(
-          (acknowledgedChunks.size / totalChunks) * 100,
-        );
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transfer.id
-              ? { ...t, progress, status: "transferring" }
-              : t,
-          ),
-        );
-
-        if (acknowledgedChunks.size === totalChunks) {
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress: 100, status: "completed" }
-                : t,
-            ),
+          const progress = Math.round(
+            (acknowledgedChunks.size / totalChunks) * 100,
           );
-          ws.removeEventListener("message", onMessage);
-        } else {
-          sendChunks();
+
+          // Throttle UI updates to reduce render load
+          if (progress % 5 === 0 || progress === 100) {
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === transfer.id
+                  ? { ...t, progress, status: "transferring" }
+                  : t,
+              ),
+            );
+          }
+
+          if (acknowledgedChunks.size === totalChunks) {
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === transfer.id
+                  ? { ...t, progress: 100, status: "completed" }
+                  : t,
+              ),
+            );
+            ws.removeEventListener("message", onMessage);
+          } else {
+            // Add small delay to prevent overwhelming the server
+            setTimeout(sendChunks, 10);
+          }
         }
+      } catch (error) {
+        console.error("Error processing message:", error);
       }
     };
 
     ws.addEventListener("message", onMessage);
-
-    // TIME TO SEND THOSEEEEEEE CHUNKSS
     sendChunks();
   };
 
