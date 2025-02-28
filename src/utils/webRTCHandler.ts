@@ -112,26 +112,6 @@ export class WebRTCHandler {
       }
     };
 
-    // Add connection state monitoring
-    peerConnection.onconnectionstatechange = () => {
-      console.log(
-        `Connection state changed: ${peerConnection.connectionState}`,
-      );
-      if (peerConnection.connectionState === "failed") {
-        console.error(
-          "Connection failed, possibly due to NAT traversal issues",
-        );
-      }
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log(`ICE connection state: ${peerConnection.iceConnectionState}`);
-      if (peerConnection.iceConnectionState === "failed") {
-        // Try to restart ICE
-        peerConnection.restartIce();
-      }
-    };
-
     peerConnection.ondatachannel = (event) => {
       const dataChannel = event.channel;
       this.setupDataChannel(dataChannel, targetId);
@@ -242,8 +222,7 @@ export class WebRTCHandler {
   }
 
   private processFileChunk(data: ArrayBuffer) {
-    // The last non-binary message should have been a file-chunk message
-    // indicating which transfer and chunk this belongs to
+    // Find active transfer
     const fileInfo = Array.from(this.fileInfo.entries()).find(
       ([, info]) => info.receivedChunks < info.totalChunks,
     );
@@ -256,23 +235,23 @@ export class WebRTCHandler {
     const [transferId, info] = fileInfo;
     const chunkIndex = info.receivedChunks;
 
-    // Store the chunk
+    // Store chunk
     const chunks = this.fileChunks.get(transferId) || new Map();
     chunks.set(chunkIndex, new Uint8Array(data));
     this.fileChunks.set(transferId, chunks);
 
-    // Update received count
+    // Update count
     info.receivedChunks++;
     this.fileInfo.set(transferId, info);
 
-    // Send an acknowledgment every 5 chunks or for every chunk for small files
+    // Send acknowledgment periodically
     const shouldAck =
       info.totalChunks < 50 ||
       info.receivedChunks % 5 === 0 ||
       info.receivedChunks === info.totalChunks;
 
     if (shouldAck) {
-      // Send acknowledgment to help with flow control
+      // Send acknowledgment for flow control
       for (const [, channel] of this.dataChannels.entries()) {
         if (channel.readyState === "open") {
           try {
@@ -283,15 +262,15 @@ export class WebRTCHandler {
                 receivedCount: info.receivedChunks,
               }),
             );
-            break; // Send to the first open channel
+            break; // Send to first open channel
           } catch (err) {
-            console.error("Error sending chunk acknowledgment:", err);
+            console.error("Error sending acknowledgment:", err);
           }
         }
       }
     }
 
-    // Update progress but don't spam UI updates
+    // Update progress but limit UI updates
     if (shouldAck || info.receivedChunks === info.totalChunks) {
       const progress = Math.round(
         (info.receivedChunks / info.totalChunks) * 100,
@@ -388,18 +367,32 @@ export class WebRTCHandler {
     this.fileChunks.delete(transferId);
   }
 
+  private generateUUID(): string {
+    if ("randomUUID" in crypto) {
+      return crypto.randomUUID();
+    } else {
+      // RFC4122 version 4 compliant UUID fallback
+      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+        (
+          +c ^
+          (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))
+        ).toString(16),
+      );
+    }
+  }
+
   public async sendFile(file: File, targetId: string) {
     // Generate a unique ID for this transfer
-    const transferId = crypto.randomUUID();
+    const transferId = this.generateUUID();
 
-    // Ensure we have a data channel for this peer
+    // Ensure we have a data channel
     let dataChannel = this.dataChannels.get(targetId);
 
     if (!dataChannel || dataChannel.readyState !== "open") {
       // Create a new peer connection if needed
       const peerConnection = await this.createPeerConnection(targetId);
 
-      // Create a new data channel for file transfer
+      // Create data channel with ordered delivery
       dataChannel = peerConnection.createDataChannel(
         `file-transfer-${transferId}`,
         {
@@ -408,7 +401,7 @@ export class WebRTCHandler {
       );
       this.setupDataChannel(dataChannel, targetId);
 
-      // Create and send the offer
+      // Create and send offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
@@ -420,11 +413,11 @@ export class WebRTCHandler {
         }),
       );
 
-      // Wait for data channel to open
+      // Wait for data channel to open with timeout
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Timed out waiting for data channel to open"));
-        }, 15000); // 15s timeout for connection establishment
+        }, 15000); // 15s timeout
 
         const checkState = () => {
           if (dataChannel?.readyState === "open") {
@@ -446,7 +439,7 @@ export class WebRTCHandler {
       });
     }
 
-    // Notify UI about the transfer
+    // Start transfer process
     this.callbacks.onTransferProgress({
       id: transferId,
       fileName: file.name,
@@ -458,7 +451,7 @@ export class WebRTCHandler {
     // Calculate total chunks
     const totalChunks = Math.ceil(file.size / WebRTCHandler.CHUNK_SIZE);
 
-    // Send file info first
+    // Send file info and wait for acknowledgment
     dataChannel.send(
       JSON.stringify({
         type: "file-info",
@@ -469,7 +462,7 @@ export class WebRTCHandler {
       }),
     );
 
-    // Wait for acknowledgment
+    // Wait for acknowledgment with timeout
     await new Promise<void>((resolve) => {
       const messageHandler = (event: MessageEvent) => {
         if (typeof event.data === "string") {
@@ -490,48 +483,37 @@ export class WebRTCHandler {
 
       dataChannel.addEventListener("message", messageHandler);
 
-      // Timeout after 5 seconds
       setTimeout(() => {
         dataChannel?.removeEventListener("message", messageHandler);
-        resolve(); // Continue anyway
+        resolve(); // Continue anyway after timeout
       }, 5000);
     });
 
-    // Set up progress tracking
-    let sentChunks = 0;
-    const updateProgress = () => {
-      const progress = Math.round((sentChunks / totalChunks) * 100);
-      this.callbacks.onTransferProgress({
-        id: transferId,
-        fileName: file.name,
-        fileSize: file.size,
-        progress,
-        status: "transferring",
-      });
-    };
-
     try {
-      // Start sending file in chunks with flow control
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * WebRTCHandler.CHUNK_SIZE;
+      // Track progress
+      let sentChunks = 0;
+      const updateProgress = () => {
+        const progress = Math.round((sentChunks / totalChunks) * 100);
+        this.callbacks.onTransferProgress({
+          id: transferId,
+          fileName: file.name,
+          fileSize: file.size,
+          progress,
+          status: "transferring",
+        });
+      };
+
+      // Send file in chunks with better background tab support
+      const sendChunk = async (index: number) => {
+        const start = index * WebRTCHandler.CHUNK_SIZE;
         const end = Math.min(start + WebRTCHandler.CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
         const buffer = await chunk.arrayBuffer();
 
         // Check buffer state and wait if necessary
-        if (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
-          // 8MB buffer threshold
-          await new Promise<void>((resolve) => {
-            const checkBuffer = () => {
-              if (dataChannel.bufferedAmount < 1 * 1024 * 1024) {
-                // Wait until it drops below 1MB
-                resolve();
-              } else {
-                setTimeout(checkBuffer, 100);
-              }
-            };
-            setTimeout(checkBuffer, 100);
-          });
+        while (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+          // Use shorter intervals to recover faster when tab becomes active again
+          await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
         // Send chunk metadata
@@ -539,32 +521,37 @@ export class WebRTCHandler {
           JSON.stringify({
             type: "file-chunk",
             transferId,
-            chunkIndex: i,
+            chunkIndex: index,
           }),
         );
 
-        // Wait a tiny bit to ensure metadata is processed first
-        await new Promise((resolve) => setTimeout(resolve, 5));
-
-        // Send binary data
+        // Send binary data immediately after metadata
         dataChannel.send(buffer);
         sentChunks++;
 
-        // Update progress periodically (not every chunk)
+        // Update progress periodically
         if (sentChunks % 5 === 0 || sentChunks === totalChunks) {
           updateProgress();
         }
+      };
 
-        // Allow the browser to catch up periodically
-        if (i % 20 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
+      // Process chunks in batches for better performance
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+        const batch = [];
+        for (let j = 0; j < BATCH_SIZE && i + j < totalChunks; j++) {
+          batch.push(sendChunk(i + j));
         }
+
+        // Wait for batch to complete
+        await Promise.all(batch);
+
+        // Small yield to allow UI updates
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
-      // Final progress update
+      // Completion code remains the same
       updateProgress();
-
-      // Signal completion
       dataChannel.send(
         JSON.stringify({
           type: "transfer-complete",
@@ -572,7 +559,6 @@ export class WebRTCHandler {
         }),
       );
 
-      // Mark transfer as complete
       this.callbacks.onTransferComplete({
         id: transferId,
         fileName: file.name,
@@ -581,6 +567,7 @@ export class WebRTCHandler {
         status: "completed",
       });
     } catch (error) {
+      // Error handling remains the same
       console.error("Error during file transfer:", error);
       this.callbacks.onTransferError(
         { id: transferId, fileName: file.name },
