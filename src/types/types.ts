@@ -16,7 +16,10 @@ export interface FileTransfer {
   status: "pending" | "transferring" | "receiving" | "completed" | "error";
 }
 
-// src/types/types.ts
+export interface FileTransferError {
+  id: string;
+  fileName: string;
+}
 
 export interface FileTransferReceiver {
   fileName: string;

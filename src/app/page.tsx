@@ -1,6 +1,6 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import { Device, FileTransfer, FileTransferReceiver } from "../types/types";
+import React, { useState, useEffect, useRef } from "react";
+import { Device, FileTransfer } from "../types/types";
 import { detectDeviceType } from "../utils/deviceDetection";
 import { DeviceList } from "../components/DeviceList";
 import { FileUpload } from "../components/FileUpload";
@@ -8,8 +8,7 @@ import { TransferProgress } from "../components/TransferProgress";
 import Image from "next/image";
 import { RoomJoin } from "@/components/RoomJoin";
 import { Sun, Moon } from "lucide-react";
-
-const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+import { WebRTCHandler } from "@/utils/webRTCHandler";
 
 const App: React.FC = () => {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -20,6 +19,7 @@ const App: React.FC = () => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [theme, setTheme] = useState("light");
+  const webRTCHandlerRef = useRef<WebRTCHandler | null>(null);
 
   useEffect(() => {
     const storedTheme = localStorage.getItem("theme");
@@ -76,102 +76,50 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!ws) return;
 
-    const incomingTransfers = new Map<string, FileTransferReceiver>();
-
-    const onMessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-
-      if (data.type === "file-chunk") {
-        const { transfer, chunk } = data;
-        let receiver = incomingTransfers.get(transfer.id);
-
-        if (!receiver) {
-          receiver = {
-            fileName: transfer.fileName,
-            fileSize: transfer.fileSize,
-            totalChunks: transfer.totalChunks,
-            receivedChunks: new Map<number, Uint8Array>(),
-            receivedCount: 0,
-          };
-          incomingTransfers.set(transfer.id, receiver);
-        }
-
-        // Storing the received chunk
-        receiver.receivedChunks.set(
-          transfer.currentChunk,
-          new Uint8Array(chunk),
-        );
-        receiver.receivedCount++;
-
-        // Updating the progress
-        const progress = Math.round(
-          (receiver.receivedCount / receiver.totalChunks) * 100,
-        );
+    // Initialize WebRTC handler when websocket is connected
+    webRTCHandlerRef.current = new WebRTCHandler(ws, {
+      onTransferProgress: (transfer) => {
         setTransfers((prev) => {
           const existingTransfer = prev.find((t) => t.id === transfer.id);
           if (existingTransfer) {
-            return prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress, status: "receiving" }
-                : t,
-            );
+            return prev.map((t) => (t.id === transfer.id ? transfer : t));
           } else {
-            return [
-              ...prev,
-              {
-                id: transfer.id,
-                fileName: transfer.fileName,
-                fileSize: transfer.fileSize,
-                progress,
-                status: "receiving",
-              },
-            ];
+            return [...prev, transfer];
           }
         });
-
-        // If all chunks are received, assemble and save the file
-        if (receiver.receivedCount === receiver.totalChunks) {
-          const orderedChunks: Uint8Array[] = [];
-          for (let i = 0; i < receiver.totalChunks; i++) {
-            const chunkData = receiver.receivedChunks.get(i);
-            if (chunkData) {
-              orderedChunks.push(chunkData);
-            } else {
-              console.error(`Missing chunk ${i} for transfer ${transfer.id}`);
-              return;
-            }
-          }
-
-          // Concatenate all chunks into one
-          const fileBuffer = new Blob(orderedChunks);
-          const url = URL.createObjectURL(fileBuffer);
-
-          // this is to trigger download
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = receiver.fileName;
-          a.click();
-          URL.revokeObjectURL(url);
-
-          // and this is to Update the transfer status
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress: 100, status: "completed" }
-                : t,
-            ),
-          );
-
-          // jussst cleanin up those transfers
-          incomingTransfers.delete(transfer.id);
-        }
-      }
-    };
-
-    ws.addEventListener("message", onMessage);
+      },
+      onTransferComplete: (transfer) => {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transfer.id
+              ? { ...t, progress: 100, status: "completed" }
+              : t,
+          ),
+        );
+      },
+      onTransferError: (transfer, error) => {
+        console.error(`Transfer error for ${transfer.fileName}: ${error}`);
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transfer.id ? { ...t, status: "error" } : t,
+          ),
+        );
+      },
+      onFileReceived: (fileName, fileData) => {
+        const url = URL.createObjectURL(fileData);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+    });
 
     return () => {
-      ws.removeEventListener("message", onMessage);
+      if (webRTCHandlerRef.current) {
+        webRTCHandlerRef.current.cleanup();
+        webRTCHandlerRef.current = null;
+      }
     };
   }, [ws]);
 
@@ -212,27 +160,7 @@ const App: React.FC = () => {
         case "devices":
           setDevices(data.devices);
           break;
-        case "transfer-progress":
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === data.transfer.id ? { ...t, ...data.transfer } : t,
-            ),
-          );
-          break;
-        case "file-received": {
-          // Handle received file (pretty cheeky)
-          const { fileName, fileData } = data;
-          const blob = new Blob([new Uint8Array(fileData)]);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          break;
-        }
+        // Other WebSocket message types are handled by the WebRTCHandler class
       }
     };
 
@@ -243,92 +171,26 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const WINDOW_SIZE = 5; // Number of chunks to send before waiting for acknowledgments (i guess 5 is good, idk)
+  const handleFileSelect = async (file: File) => {
+    if (!selectedDevice || !webRTCHandlerRef.current) return;
 
-  const handleFileSelect = (file: File) => {
-    if (!selectedDevice || !ws) return;
+    try {
+      // Use WebRTC for file transfer
+      await webRTCHandlerRef.current.sendFile(file, selectedDevice.id);
+    } catch (error) {
+      console.error("Failed to initiate file transfer:", error);
 
-    const transfer: FileTransfer = {
-      id: generateUUID(),
-      fileName: file.name,
-      fileSize: file.size,
-      progress: 0,
-      status: "pending",
-    };
+      // Add an error transfer to the list
+      const errorTransfer: FileTransfer = {
+        id: generateUUID(),
+        fileName: file.name,
+        fileSize: file.size,
+        progress: 0,
+        status: "error",
+      };
 
-    setTransfers((prev) => [...prev, transfer]);
-
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    let currentChunk = 0;
-    const acknowledgedChunks = new Set<number>();
-
-    const sendChunks = () => {
-      while (
-        currentChunk - acknowledgedChunks.size < WINDOW_SIZE &&
-        currentChunk < totalChunks
-      ) {
-        sendChunk(currentChunk);
-        currentChunk++;
-      }
-    };
-
-    const sendChunk = async (chunkIndex: number) => {
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      const buffer = await chunk.arrayBuffer();
-
-      ws.send(
-        JSON.stringify({
-          type: "file-transfer",
-          transfer: {
-            id: transfer.id,
-            fileName: transfer.fileName,
-            fileSize: transfer.fileSize,
-            currentChunk: chunkIndex,
-            totalChunks,
-          },
-          targetDevice: selectedDevice.id,
-          chunk: Array.from(new Uint8Array(buffer)),
-        }),
-      );
-    };
-
-    const onMessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-      if (data.type === "chunk-received" && data.transferId === transfer.id) {
-        acknowledgedChunks.add(data.chunkIndex);
-
-        const progress = Math.round(
-          (acknowledgedChunks.size / totalChunks) * 100,
-        );
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transfer.id
-              ? { ...t, progress, status: "transferring" }
-              : t,
-          ),
-        );
-
-        if (acknowledgedChunks.size === totalChunks) {
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress: 100, status: "completed" }
-                : t,
-            ),
-          );
-          ws.removeEventListener("message", onMessage);
-        } else {
-          sendChunks();
-        }
-      }
-    };
-
-    ws.addEventListener("message", onMessage);
-
-    // TIME TO SEND THOSEEEEEEE CHUNKSS
-    sendChunks();
+      setTransfers((prev) => [...prev, errorTransfer]);
+    }
   };
 
   return (
