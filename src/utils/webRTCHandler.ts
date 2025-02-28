@@ -9,7 +9,14 @@ export class WebRTCHandler {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
+      // Add TURN servers - you'll need credentials for a production TURN server
+      {
+        urls: "turn:relay1.expressturn.com:3478",
+        username: "efBOXOKVH4A2WOI4SG",
+        credential: "Yrf6ujOHP9xQgsLX",
+      },
     ],
+    iceCandidatePoolSize: 10,
   };
 
   // File transfer state
