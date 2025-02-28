@@ -273,7 +273,7 @@ export class WebRTCHandler {
 
     if (shouldAck) {
       // Send acknowledgment to help with flow control
-      for (const [peerId, channel] of this.dataChannels.entries()) {
+      for (const [, channel] of this.dataChannels.entries()) {
         if (channel.readyState === "open") {
           try {
             channel.send(
