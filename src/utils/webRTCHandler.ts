@@ -11,9 +11,27 @@ export class WebRTCHandler {
       { urls: "stun:stun1.l.google.com:19302" },
       // Add TURN servers - you'll need credentials for a production TURN server
       {
-        urls: "turn:relay1.expressturn.com:3478",
-        username: "efBOXOKVH4A2WOI4SG",
-        credential: "Yrf6ujOHP9xQgsLX",
+        urls: "stun:stun.relay.metered.ca:80",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:80",
+        username: "4f4af8ccdd1b0b8c3b09d1d3",
+        credential: "nXgI5UFhuW+pOm6e",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:80?transport=tcp",
+        username: "4f4af8ccdd1b0b8c3b09d1d3",
+        credential: "nXgI5UFhuW+pOm6e",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:443",
+        username: "4f4af8ccdd1b0b8c3b09d1d3",
+        credential: "nXgI5UFhuW+pOm6e",
+      },
+      {
+        urls: "turns:global.relay.metered.ca:443?transport=tcp",
+        username: "4f4af8ccdd1b0b8c3b09d1d3",
+        credential: "nXgI5UFhuW+pOm6e",
       },
     ],
     iceCandidatePoolSize: 10,
