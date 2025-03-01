@@ -9,7 +9,6 @@ export class WebRTCHandler {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
-      // Add TURN servers - you'll need credentials for a production TURN server
       {
         urls: "stun:stun.relay.metered.ca:80",
       },

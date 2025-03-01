@@ -76,7 +76,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!ws) return;
 
-    // Initialize WebRTC handler when websocket is connected
+    // WebRTC initialization dawgg
     webRTCHandlerRef.current = new WebRTCHandler(ws, {
       onTransferProgress: (transfer) => {
         setTransfers((prev) => {
@@ -160,7 +160,7 @@ const App: React.FC = () => {
         case "devices":
           setDevices(data.devices);
           break;
-        // Other WebSocket message types are handled by the WebRTCHandler class
+        // Other WebSocket message types, later baby
       }
     };
 
@@ -175,7 +175,7 @@ const App: React.FC = () => {
     if (!selectedDevice || !webRTCHandlerRef.current) return;
 
     try {
-      // Use WebRTC for file transfer
+      // Use WebRTC for file transfer, I hate my ISP
       await webRTCHandlerRef.current.sendFile(file, selectedDevice.id);
     } catch (error) {
       console.error("Failed to initiate file transfer:", error);
