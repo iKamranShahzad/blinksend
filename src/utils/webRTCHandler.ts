@@ -5,6 +5,7 @@ export class WebRTCHandler {
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
   private dataChannels: Map<string, RTCDataChannel> = new Map();
   private ws: WebSocket;
+  private pendingChunks: Map<string, number> = new Map();
   private config: RTCConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -212,36 +213,43 @@ export class WebRTCHandler {
   }
 
   private prepareForChunk(data: any) {
-    const { transferId } = data;
+    const { transferId, chunkIndex } = data;
 
-    // Make sure we have a place to store this chunk
-    if (!this.fileChunks.has(transferId)) {
-      this.fileChunks.set(transferId, new Map());
+    // Store metadata about the expected next chunk
+    if (!this.pendingChunks) {
+      this.pendingChunks = new Map();
     }
+
+    // Store which chunk we're expecting next for this transfer
+    this.pendingChunks.set(transferId, chunkIndex);
   }
 
   private processFileChunk(data: ArrayBuffer) {
-    // Find active transfer
-    const fileInfo = Array.from(this.fileInfo.entries()).find(
-      ([, info]) => info.receivedChunks < info.totalChunks,
-    );
+    // Find which transfer this chunk belongs to
+    const pendingEntry = Array.from(this.pendingChunks.entries())[0];
 
-    if (!fileInfo) {
-      console.error("Received file chunk but no active transfer");
+    if (!pendingEntry) {
+      console.error("Received chunk but no pending transfer");
       return;
     }
 
-    const [transferId, info] = fileInfo;
-    const chunkIndex = info.receivedChunks;
+    const [transferId, chunkIndex] = pendingEntry;
+    const info = this.fileInfo.get(transferId);
 
-    // Store chunk
+    if (!info) {
+      console.error("No file info for transfer", transferId);
+      return;
+    }
+
+    // Store chunk with explicit index
     const chunks = this.fileChunks.get(transferId) || new Map();
     chunks.set(chunkIndex, new Uint8Array(data));
     this.fileChunks.set(transferId, chunks);
 
-    // Update count
+    // Update count and remove from pending
     info.receivedChunks++;
     this.fileInfo.set(transferId, info);
+    this.pendingChunks.delete(transferId);
 
     // Send acknowledgment periodically
     const shouldAck =
@@ -332,22 +340,47 @@ export class WebRTCHandler {
       return;
     }
 
+    // Check if we have all expected chunks
+    if (info.receivedChunks < info.totalChunks) {
+      this.callbacks.onTransferError(
+        { id: transferId, fileName: info.fileName },
+        `Transfer incomplete: missing ${info.totalChunks - info.receivedChunks} chunks`,
+      );
+      return;
+    }
+
     // Assemble the file from chunks
     const orderedChunks: Uint8Array[] = [];
+    let hasError = false;
+
     for (let i = 0; i < info.totalChunks; i++) {
       const chunk = chunks.get(i);
       if (!chunk) {
         this.callbacks.onTransferError(
           { id: transferId, fileName: info.fileName },
-          `Missing chunk ${i}`,
+          `Missing chunk ${i} of ${info.totalChunks}`,
         );
-        return;
+        hasError = true;
+        break;
       }
       orderedChunks.push(chunk);
     }
 
-    // Create final file blob
-    const fileBlob = new Blob(orderedChunks);
+    if (hasError) {
+      return;
+    }
+
+    // Create final file blob with proper MIME type detection
+    const fileExt = info.fileName.split(".").pop()?.toLowerCase() || "";
+    let mimeType = "application/octet-stream";
+
+    // Set proper MIME type for common video formats
+    if (["mp4", "mpeg", "mpg"].includes(fileExt)) mimeType = "video/mp4";
+    if (["webm"].includes(fileExt)) mimeType = "video/webm";
+    if (["mov", "qt"].includes(fileExt)) mimeType = "video/quicktime";
+    if (["avi"].includes(fileExt)) mimeType = "video/x-msvideo";
+
+    const fileBlob = new Blob(orderedChunks, { type: mimeType });
 
     // Notify completion
     this.callbacks.onTransferComplete({

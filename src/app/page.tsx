@@ -8,6 +8,7 @@ import { TransferProgress } from "../components/TransferProgress";
 import Image from "next/image";
 import { RoomJoin } from "@/components/RoomJoin";
 import { Sun, Moon } from "lucide-react";
+import { toast } from "sonner";
 import { WebRTCHandler } from "@/utils/webRTCHandler";
 
 const App: React.FC = () => {
@@ -126,8 +127,18 @@ const App: React.FC = () => {
   useEffect(() => {
     const websocket = new WebSocket("wss://blinksend-backend.onrender.com");
 
+    toast.loading("Connecting to BlinkSend server...", {
+      id: "websocket-connection",
+      duration: Infinity,
+    });
+
     websocket.onopen = () => {
       console.log("Connected to server");
+      toast.success("Connected to BlinkSend, happy file sharing!", {
+        id: "websocket-connection",
+        duration: 2000,
+      });
+
       websocket.send(
         JSON.stringify({
           type: "register",
@@ -138,6 +149,18 @@ const App: React.FC = () => {
           },
         }),
       );
+    };
+
+    websocket.onclose = () => {
+      toast.error("Disconnected from server", {
+        id: "websocket-connection",
+      });
+    };
+
+    websocket.onerror = () => {
+      toast.error("Connection error", {
+        id: "websocket-connection",
+      });
     };
 
     websocket.onmessage = (event) => {
@@ -168,6 +191,7 @@ const App: React.FC = () => {
 
     return () => {
       websocket.close();
+      toast.dismiss("websocket-connection");
     };
   }, []);
 
