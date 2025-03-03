@@ -169,19 +169,36 @@ const App: React.FC = () => {
         case "room-created":
           setRoomId(data.roomId);
           setRoomError(null);
+          toast.success(`You created room ${data.roomId}`);
           break;
         case "room-joined":
           setRoomId(data.roomId);
           setRoomError(null);
+          toast.success(`You joined room ${data.roomId}`);
           break;
         case "room-error":
           setRoomError(data.message);
+          break;
+        case "room-left":
+          setRoomId(null);
+          setSelectedDevice(null);
+          toast.success(`You left room ${data.roomId}`);
           break;
         case "self-identity":
           setSelfName(data.name);
           break;
         case "devices":
           setDevices(data.devices);
+          break;
+        case "device-joined":
+          toast.info(`${data.deviceName} joined the room`, {
+            icon: "👋",
+          });
+          break;
+        case "device-left":
+          toast.info(`${data.deviceName} left the room`, {
+            icon: "👋",
+          });
           break;
         // Other WebSocket message types, later baby
       }
@@ -284,6 +301,7 @@ const App: React.FC = () => {
                   devices={devices}
                   selectedDevice={selectedDevice}
                   onDeviceSelect={setSelectedDevice}
+                  roomId={roomId}
                 />
               </section>
 
