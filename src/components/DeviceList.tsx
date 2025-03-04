@@ -1,5 +1,8 @@
 import React from "react";
+import { Copy, CheckCheck } from "lucide-react";
+import { useState } from "react";
 import { Device } from "../types/types";
+import { toast } from "sonner";
 
 interface DeviceListProps {
   devices: Device[];
@@ -14,6 +17,21 @@ export const DeviceList: React.FC<DeviceListProps> = ({
   onDeviceSelect,
   roomId,
 }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyRoomId = () => {
+    if (roomId) {
+      navigator.clipboard
+        .writeText(roomId)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch((err) => console.error("Failed to copy room code:", err));
+      toast.success("Room code copied to clipboard");
+    }
+  };
+
   if (devices.length === 0) {
     return (
       <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100 p-6 text-center shadow-sm dark:border-indigo-800 dark:from-indigo-900/40 dark:to-violet-900/20">
@@ -38,8 +56,29 @@ export const DeviceList: React.FC<DeviceListProps> = ({
           Ready to Share
         </h3>
 
-        <div className="mx-auto mb-2 max-w-xs rounded-lg bg-white/80 px-4 py-2 font-mono text-lg font-bold tracking-wider text-blue-800 shadow-sm dark:bg-indigo-900/60 dark:text-indigo-100">
-          {roomId || "..."}
+        <div className="relative mx-auto mb-2 max-w-xs">
+          <div className="flex items-center rounded-lg bg-white/80 px-4 py-2 font-mono text-lg font-bold tracking-wider text-blue-800 shadow-sm dark:bg-indigo-900/60 dark:text-indigo-100">
+            <div className="relative w-full text-center">{roomId || "..."}</div>
+            {roomId && (
+              <button
+                onClick={handleCopyRoomId}
+                className="absolute right-4 flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-blue-100 dark:hover:bg-indigo-800"
+                title="Copy room code"
+              >
+                {copied ? (
+                  <CheckCheck
+                    size={16}
+                    className="text-green-500 dark:text-green-400"
+                  />
+                ) : (
+                  <Copy
+                    size={16}
+                    className="text-blue-600 dark:text-indigo-300"
+                  />
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
         <p className="text-sm text-blue-600 dark:text-indigo-400">

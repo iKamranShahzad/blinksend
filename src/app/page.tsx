@@ -7,7 +7,7 @@ import { FileUpload } from "../components/FileUpload";
 import { TransferProgress } from "../components/TransferProgress";
 import Image from "next/image";
 import { RoomJoin } from "@/components/RoomJoin";
-import { Sun, Moon } from "lucide-react";
+import { Sun, Moon, LogOut, Hash } from "lucide-react";
 import { toast } from "sonner";
 import { WebRTCHandler } from "@/utils/webRTCHandler";
 
@@ -18,7 +18,6 @@ const App: React.FC = () => {
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [selfName, setSelfName] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [roomError, setRoomError] = useState<string | null>(null);
   const [theme, setTheme] = useState("light");
   const webRTCHandlerRef = useRef<WebRTCHandler | null>(null);
 
@@ -72,6 +71,22 @@ const App: React.FC = () => {
         }),
       );
     }
+  };
+
+  const handleLeaveRoom = () => {
+    if (!ws || !roomId) return;
+
+    ws.send(
+      JSON.stringify({
+        type: "leave-room",
+        roomId: roomId,
+      }),
+    );
+
+    setRoomId(null);
+    setSelectedDevice(null);
+    setDevices([]);
+    setTransfers([]);
   };
 
   useEffect(() => {
@@ -168,21 +183,24 @@ const App: React.FC = () => {
       switch (data.type) {
         case "room-created":
           setRoomId(data.roomId);
-          setRoomError(null);
           toast.success(`You created room ${data.roomId}`);
           break;
         case "room-joined":
           setRoomId(data.roomId);
-          setRoomError(null);
           toast.success(`You joined room ${data.roomId}`);
           break;
         case "room-error":
-          setRoomError(data.message);
+          toast.error(data.message);
           break;
         case "room-left":
           setRoomId(null);
           setSelectedDevice(null);
-          toast.success(`You left room ${data.roomId}`);
+          setDevices([]);
+          toast.success(`You left the room ${data.roomId}`);
+
+          if (webRTCHandlerRef.current) {
+            webRTCHandlerRef.current.cleanup();
+          }
           break;
         case "self-identity":
           setSelfName(data.name);
@@ -266,23 +284,19 @@ const App: React.FC = () => {
               )}
             </p>
             {roomId && (
-              <p className="mt-2 flex items-center text-sm font-semibold text-cyan-700">
-                <svg
-                  className="mr-1 h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg"
+              <div className="mt-3 flex items-center gap-3">
+                <div className="flex items-center rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 shadow-sm ring-1 ring-inset ring-blue-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:ring-indigo-800">
+                  <Hash size={14} className="mr-1.5" />
+                  {roomId}
+                </div>
+                <button
+                  onClick={handleLeaveRoom}
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 shadow-sm transition-colors hover:bg-rose-100 hover:text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 dark:hover:text-rose-300"
+                  title="Leave Room"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M13 16h-1v-4h-1m1-4h.01M12 20.5a8.5 8.5 0 100-17 8.5 8.5 0 000 17z"
-                  ></path>
-                </svg>
-                Room ID: {roomId}
-              </p>
+                  <LogOut size={14} strokeWidth={2.5} />
+                </button>
+              </div>
             )}
           </header>
 
@@ -331,11 +345,6 @@ const App: React.FC = () => {
                 </section>
               )}
             </>
-          )}
-          {roomError && (
-            <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600">
-              {roomError}
-            </div>
           )}
         </div>
       </div>

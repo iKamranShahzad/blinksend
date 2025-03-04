@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { DoorClosed } from "lucide-react";
+import { toast } from "sonner";
 
 interface RoomJoinProps {
   onCreateRoom: () => void;
@@ -11,15 +12,14 @@ export const RoomJoin: React.FC<RoomJoinProps> = ({
   onJoinRoom,
 }) => {
   const [roomId, setRoomId] = useState("");
-  const [error, setError] = useState("");
 
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (roomId.length !== 5) {
-      setError("Room ID must be 5 digits");
+      toast.error("Room ID must be 5 characters long.");
       return;
     }
-    setError("");
+
     onJoinRoom(roomId);
   };
 
@@ -70,12 +70,6 @@ export const RoomJoin: React.FC<RoomJoinProps> = ({
           </button>
         </form>
       </div>
-
-      {error && (
-        <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-100 p-3 text-center text-red-600 sm:w-1/2">
-          {error}
-        </div>
-      )}
     </div>
   );
 };
