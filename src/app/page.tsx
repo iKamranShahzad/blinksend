@@ -197,10 +197,6 @@ const App: React.FC = () => {
           setSelectedDevice(null);
           setDevices([]);
           toast.success(`You left the room ${data.roomId}`);
-
-          if (webRTCHandlerRef.current) {
-            webRTCHandlerRef.current.cleanup();
-          }
           break;
         case "self-identity":
           setSelfName(data.name);
