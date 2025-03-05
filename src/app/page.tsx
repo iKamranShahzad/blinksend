@@ -142,7 +142,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const websocket = new WebSocket("wss://blinksend-backend.onrender.com");
 
-    toast.loading("Connecting to BlinkSend server...", {
+    toast.loading("Connecting to BlinkSend...", {
       id: "websocket-connection",
       duration: Infinity,
     });
