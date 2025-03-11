@@ -214,7 +214,7 @@ const App: React.FC = () => {
             icon: "👋",
           });
           break;
-        // Other WebSocket message types, later baby
+        // Other WebSocket messages, later baby
       }
     };
 
