@@ -148,7 +148,7 @@ const App: React.FC = () => {
     });
 
     websocket.onopen = () => {
-      toast.success("Connected to BlinkSend, happy file sharing!", {
+      toast.success("Connected! Happy file sharing!", {
         id: "websocket-connection",
         duration: 2000,
       });
