@@ -225,6 +225,21 @@ const App: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (selectedDevice) {
+      const deviceStillExists = devices.some(
+        (device) => device.id === selectedDevice.id,
+      );
+
+      if (!deviceStillExists) {
+        setSelectedDevice(null);
+        toast.warning("The selected device has disconnected", {
+          description: "Please select another device to continue.",
+        });
+      }
+    }
+  }, [devices, selectedDevice]);
+
   const handleFileSelect = async (file: File) => {
     if (!selectedDevice || !webRTCHandlerRef.current) return;
 
@@ -245,6 +260,10 @@ const App: React.FC = () => {
 
       setTransfers((prev) => [...prev, errorTransfer]);
     }
+  };
+
+  const handleRemoveTransfer = (id: string) => {
+    setTransfers((prev) => prev.filter((t) => t.id !== id));
   };
 
   return (
@@ -334,7 +353,11 @@ const App: React.FC = () => {
                     }}
                   >
                     {transfers.map((transfer) => (
-                      <TransferProgress key={transfer.id} transfer={transfer} />
+                      <TransferProgress
+                        key={transfer.id}
+                        transfer={transfer}
+                        onRemove={handleRemoveTransfer}
+                      />
                     ))}
                   </div>
                 </section>
