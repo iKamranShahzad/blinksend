@@ -76,6 +76,11 @@ const App: React.FC = () => {
   const handleLeaveRoom = () => {
     if (!ws || !roomId) return;
 
+    if (webRTCHandlerRef.current) {
+      webRTCHandlerRef.current.cleanup();
+      webRTCHandlerRef.current = null;
+    }
+
     ws.send(
       JSON.stringify({
         type: "leave-room",
@@ -91,45 +96,46 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!ws) return;
-
-    // WebRTC initialization dawgg
-    webRTCHandlerRef.current = new WebRTCHandler(ws, {
-      onTransferProgress: (transfer) => {
-        setTransfers((prev) => {
-          const existingTransfer = prev.find((t) => t.id === transfer.id);
-          if (existingTransfer) {
-            return prev.map((t) => (t.id === transfer.id ? transfer : t));
-          } else {
-            return [...prev, transfer];
-          }
-        });
-      },
-      onTransferComplete: (transfer) => {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transfer.id
-              ? { ...t, progress: 100, status: "completed" }
-              : t,
-          ),
-        );
-      },
-      onTransferError: (transfer, error) => {
-        console.error(`Transfer error for ${transfer.fileName}: ${error}`);
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transfer.id ? { ...t, status: "error" } : t,
-          ),
-        );
-      },
-      onFileReceived: (fileName, fileData) => {
-        const url = URL.createObjectURL(fileData);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        a.click();
-        URL.revokeObjectURL(url);
-      },
-    });
+    if (roomId && !webRTCHandlerRef.current) {
+      // WebRTC initialization dawgg
+      webRTCHandlerRef.current = new WebRTCHandler(ws, {
+        onTransferProgress: (transfer) => {
+          setTransfers((prev) => {
+            const existingTransfer = prev.find((t) => t.id === transfer.id);
+            if (existingTransfer) {
+              return prev.map((t) => (t.id === transfer.id ? transfer : t));
+            } else {
+              return [...prev, transfer];
+            }
+          });
+        },
+        onTransferComplete: (transfer) => {
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === transfer.id
+                ? { ...t, progress: 100, status: "completed" }
+                : t,
+            ),
+          );
+        },
+        onTransferError: (transfer, error) => {
+          console.error(`Transfer error for ${transfer.fileName}: ${error}`);
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === transfer.id ? { ...t, status: "error" } : t,
+            ),
+          );
+        },
+        onFileReceived: (fileName, fileData) => {
+          const url = URL.createObjectURL(fileData);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fileName;
+          a.click();
+          URL.revokeObjectURL(url);
+        },
+      });
+    }
 
     return () => {
       if (webRTCHandlerRef.current) {
@@ -137,7 +143,7 @@ const App: React.FC = () => {
         webRTCHandlerRef.current = null;
       }
     };
-  }, [ws]);
+  }, [ws, roomId]);
 
   useEffect(() => {
     const websocket = new WebSocket("wss://blinksend-backend.onrender.com");
@@ -240,25 +246,45 @@ const App: React.FC = () => {
     }
   }, [devices, selectedDevice]);
 
-  const handleFileSelect = async (file: File) => {
+  const handleFileSelect = async (files: File[]) => {
     if (!selectedDevice || !webRTCHandlerRef.current) return;
 
-    try {
-      // Use WebRTC for file transfer, I hate my ISP
-      await webRTCHandlerRef.current.sendFile(file, selectedDevice.id);
-    } catch (error) {
-      console.error("Failed to initiate file transfer:", error);
+    if (files.length > 1) {
+      toast.info(`Preparing to send ${files.length} files`);
+    }
 
-      // Add an error transfer to the list
-      const errorTransfer: FileTransfer = {
-        id: generateUUID(),
-        fileName: file.name,
-        fileSize: file.size,
-        progress: 0,
-        status: "error",
-      };
+    for (const file of files) {
+      try {
+        const transferId = generateUUID();
 
-      setTransfers((prev) => [...prev, errorTransfer]);
+        const pendingTransfer: FileTransfer = {
+          id: transferId,
+          fileName: file.name,
+          fileSize: file.size,
+          progress: 0,
+          status: "pending",
+        };
+
+        setTransfers((prev) => [...prev, pendingTransfer]);
+
+        await webRTCHandlerRef.current.sendFile(
+          file,
+          selectedDevice.id,
+          transferId,
+        );
+      } catch (error) {
+        console.error(`Failed to send file ${file.name}:`, error);
+
+        const errorTransfer: FileTransfer = {
+          id: generateUUID(),
+          fileName: file.name,
+          fileSize: file.size,
+          progress: 0,
+          status: "error",
+        };
+
+        setTransfers((prev) => [...prev, errorTransfer]);
+      }
     }
   };
 

@@ -1,7 +1,7 @@
 import React, { useRef } from "react";
 
 interface FileUploadProps {
-  onFileSelect: (file: File) => void;
+  onFileSelect: (files: File[]) => void; // Changed to accept an array of files
   disabled: boolean;
 }
 
@@ -16,9 +16,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      onFileSelect(file);
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      // Convert FileList to array and pass all files
+      const filesArray = Array.from(files);
+      onFileSelect(filesArray);
+
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -32,6 +35,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         ref={fileInputRef}
         onChange={handleChange}
         className="hidden"
+        multiple // Add the multiple attribute
       />
       <button
         onClick={handleClick}
@@ -42,7 +46,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             : "bg-blue-500 font-semibold hover:bg-blue-600 active:bg-blue-700 dark:bg-violet-500 dark:text-zinc-950 dark:hover:bg-violet-600 dark:active:bg-violet-600"
         }`}
       >
-        {disabled ? "Select a device first" : "Choose File to Send"}
+        {disabled ? "Select a device first" : "Choose Files to Send"}
       </button>
     </div>
   );

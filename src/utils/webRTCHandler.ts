@@ -5,7 +5,9 @@ export class WebRTCHandler {
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
   private dataChannels: Map<string, RTCDataChannel> = new Map();
   private ws: WebSocket;
-  private pendingChunks: Map<string, number> = new Map();
+  private pendingChunks: Map<string, { peerId: string; chunkIndex: number }> =
+    new Map();
+
   private config: RTCConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -15,29 +17,28 @@ export class WebRTCHandler {
       },
       {
         urls: "turn:global.relay.metered.ca:80",
-        username: "4f4af8ccdd1b0b8c3b09d1d3",
-        credential: "nXgI5UFhuW+pOm6e",
+        username: "9126f1ceb9f6fd4d1b9d1fe6",
+        credential: "VCdWbkdKQJ0cKIlD",
       },
       {
         urls: "turn:global.relay.metered.ca:80?transport=tcp",
-        username: "4f4af8ccdd1b0b8c3b09d1d3",
-        credential: "nXgI5UFhuW+pOm6e",
+        username: "9126f1ceb9f6fd4d1b9d1fe6",
+        credential: "VCdWbkdKQJ0cKIlD",
       },
       {
         urls: "turn:global.relay.metered.ca:443",
-        username: "4f4af8ccdd1b0b8c3b09d1d3",
-        credential: "nXgI5UFhuW+pOm6e",
+        username: "9126f1ceb9f6fd4d1b9d1fe6",
+        credential: "VCdWbkdKQJ0cKIlD",
       },
       {
         urls: "turns:global.relay.metered.ca:443?transport=tcp",
-        username: "4f4af8ccdd1b0b8c3b09d1d3",
-        credential: "nXgI5UFhuW+pOm6e",
+        username: "9126f1ceb9f6fd4d1b9d1fe6",
+        credential: "VCdWbkdKQJ0cKIlD",
       },
     ],
     iceCandidatePoolSize: 10,
   };
 
-  // File transfer state
   private fileChunks: Map<string, Map<number, Uint8Array>> = new Map();
   private fileInfo: Map<
     string,
@@ -48,8 +49,11 @@ export class WebRTCHandler {
       receivedChunks: number;
     }
   > = new Map();
+  private sendingTransfers: Map<
+    string,
+    { targetId: string; fileName: string }
+  > = new Map();
 
-  // Callbacks
   private callbacks: {
     onTransferProgress: (transfer: FileTransfer) => void;
     onTransferComplete: (transfer: FileTransfer) => void;
@@ -57,8 +61,7 @@ export class WebRTCHandler {
     onFileReceived: (fileName: string, fileData: Blob) => void;
   };
 
-  // Constants for file transfer
-  private static CHUNK_SIZE = 16384; // 16KB chunks for better performance
+  private static CHUNK_SIZE = 16384;
 
   constructor(
     ws: WebSocket,
@@ -72,7 +75,6 @@ export class WebRTCHandler {
     this.ws = ws;
     this.callbacks = callbacks;
 
-    // Setup WebSocket message handler for signaling
     this.ws.addEventListener("message", this.handleSignalingMessage);
   }
 
@@ -117,7 +119,47 @@ export class WebRTCHandler {
       this.setupDataChannel(dataChannel, targetId);
     };
 
+    this.setupConnectionStateMonitoring(peerConnection, targetId);
+
     return peerConnection;
+  }
+
+  private setupConnectionStateMonitoring(
+    peerConnection: RTCPeerConnection,
+    peerId: string,
+  ) {
+    peerConnection.addEventListener("iceconnectionstatechange", () => {
+      const state = peerConnection.iceConnectionState;
+
+      if (
+        state === "disconnected" ||
+        state === "failed" ||
+        state === "closed"
+      ) {
+        this.dataChannels.forEach((channel, id) => {
+          if (id === peerId) {
+            this.fileInfo.forEach((info, transferId) => {
+              if (info.receivedChunks < info.totalChunks) {
+                this.callbacks.onTransferError(
+                  { id: transferId, fileName: info.fileName },
+                  `Connection lost: Peer disconnected (${state})`,
+                );
+              }
+            });
+
+            this.sendingTransfers.forEach((transfer, transferId) => {
+              if (transfer.targetId === peerId) {
+                this.callbacks.onTransferError(
+                  { id: transferId, fileName: transfer.fileName },
+                  `Connection lost: Receiver disconnected (${state})`,
+                );
+                this.sendingTransfers.delete(transferId);
+              }
+            });
+          }
+        });
+      }
+    });
   }
 
   private setupDataChannel(dataChannel: RTCDataChannel, peerId: string) {
@@ -128,6 +170,33 @@ export class WebRTCHandler {
     dataChannel.onopen = () => {
       console.log(`Data channel with ${peerId} is now open`);
     };
+
+    dataChannel.addEventListener("close", () => {
+      const transfersInProgress = new Map<string, { fileName: string }>();
+
+      this.fileInfo.forEach((info, transferId) => {
+        if (info.receivedChunks < info.totalChunks) {
+          transfersInProgress.set(transferId, { fileName: info.fileName });
+        }
+      });
+
+      transfersInProgress.forEach(({ fileName }, transferId) => {
+        this.callbacks.onTransferError(
+          { id: transferId, fileName },
+          "Connection closed unexpectedly",
+        );
+      });
+
+      this.sendingTransfers.forEach((transfer, transferId) => {
+        if (transfer.targetId === peerId) {
+          this.callbacks.onTransferError(
+            { id: transferId, fileName: transfer.fileName },
+            "Receiver disconnected unexpectedly",
+          );
+          this.sendingTransfers.delete(transferId);
+        }
+      });
+    });
 
     dataChannel.onclose = () => {
       console.log(`Data channel with ${peerId} is now closed`);
@@ -189,9 +258,7 @@ export class WebRTCHandler {
   }
 
   private handleDataChannelMessage(event: MessageEvent, peerId: string) {
-    // Handle different types of messages
     if (typeof event.data === "string") {
-      // Text message - control messages
       const data = JSON.parse(event.data);
 
       switch (data.type) {
@@ -199,41 +266,42 @@ export class WebRTCHandler {
           this.handleFileInfo(data, peerId);
           break;
         case "file-chunk":
-          // This is just the metadata about the chunk, the binary data comes separately
-          this.prepareForChunk(data);
+          this.prepareForChunk(data, peerId);
           break;
         case "transfer-complete":
           this.finalizeFileTransfer(data.transferId);
           break;
       }
     } else {
-      // Binary data - actual file chunks
-      this.processFileChunk(event.data);
+      this.processFileChunk(event.data, peerId);
     }
   }
 
-  private prepareForChunk(data: any) {
+  private prepareForChunk(data: any, peerId: string) {
     const { transferId, chunkIndex } = data;
 
-    // Store metadata about the expected next chunk
     if (!this.pendingChunks) {
       this.pendingChunks = new Map();
     }
 
-    // Store which chunk we're expecting next for this transfer
-    this.pendingChunks.set(transferId, chunkIndex);
+    this.pendingChunks.set(transferId, {
+      peerId,
+      chunkIndex,
+    });
   }
 
-  private processFileChunk(data: ArrayBuffer) {
-    // Find which transfer this chunk belongs to
-    const pendingEntry = Array.from(this.pendingChunks.entries())[0];
+  private processFileChunk(data: ArrayBuffer, peerId: string) {
+    const pendingEntry = Array.from(this.pendingChunks.entries()).find(
+      ([, info]) => info.peerId === peerId,
+    );
 
     if (!pendingEntry) {
-      console.error("Received chunk but no pending transfer");
+      console.error("Received chunk but no pending transfer for peer", peerId);
       return;
     }
 
-    const [transferId, chunkIndex] = pendingEntry;
+    const [transferId, chunkInfo] = pendingEntry;
+    const chunkIndex = chunkInfo.chunkIndex;
     const info = this.fileInfo.get(transferId);
 
     if (!info) {
@@ -241,43 +309,36 @@ export class WebRTCHandler {
       return;
     }
 
-    // Store chunk with explicit index
     const chunks = this.fileChunks.get(transferId) || new Map();
     chunks.set(chunkIndex, new Uint8Array(data));
     this.fileChunks.set(transferId, chunks);
 
-    // Update count and remove from pending
     info.receivedChunks++;
     this.fileInfo.set(transferId, info);
     this.pendingChunks.delete(transferId);
 
-    // Send acknowledgment periodically
     const shouldAck =
       info.totalChunks < 50 ||
       info.receivedChunks % 5 === 0 ||
       info.receivedChunks === info.totalChunks;
 
     if (shouldAck) {
-      // Send acknowledgment for flow control
-      for (const [, channel] of this.dataChannels.entries()) {
-        if (channel.readyState === "open") {
-          try {
-            channel.send(
-              JSON.stringify({
-                type: "chunk-ack",
-                transferId,
-                receivedCount: info.receivedChunks,
-              }),
-            );
-            break; // Send to first open channel
-          } catch (err) {
-            console.error("Error sending acknowledgment:", err);
-          }
+      const dataChannel = this.dataChannels.get(peerId);
+      if (dataChannel && dataChannel.readyState === "open") {
+        try {
+          dataChannel.send(
+            JSON.stringify({
+              type: "chunk-ack",
+              transferId,
+              receivedCount: info.receivedChunks,
+            }),
+          );
+        } catch (err) {
+          console.error("Error sending acknowledgment:", err);
         }
       }
     }
 
-    // Update progress but limit UI updates
     if (shouldAck || info.receivedChunks === info.totalChunks) {
       const progress = Math.round(
         (info.receivedChunks / info.totalChunks) * 100,
@@ -291,7 +352,6 @@ export class WebRTCHandler {
       });
     }
 
-    // Check if all chunks received
     if (info.receivedChunks === info.totalChunks) {
       this.finalizeFileTransfer(transferId);
     }
@@ -300,7 +360,6 @@ export class WebRTCHandler {
   private handleFileInfo(data: any, peerId: string) {
     const { transferId, fileName, fileSize, totalChunks } = data;
 
-    // Initialize file info for the incoming transfer
     this.fileInfo.set(transferId, {
       fileName,
       fileSize,
@@ -308,10 +367,8 @@ export class WebRTCHandler {
       receivedChunks: 0,
     });
 
-    // Initialize storage for chunks
     this.fileChunks.set(transferId, new Map());
 
-    // Acknowledge that we're ready to receive
     const dataChannel = this.dataChannels.get(peerId);
     if (dataChannel) {
       dataChannel.send(
@@ -322,7 +379,6 @@ export class WebRTCHandler {
       );
     }
 
-    // Create an entry in the transfers list
     this.callbacks.onTransferProgress({
       id: transferId,
       fileName,
@@ -340,7 +396,6 @@ export class WebRTCHandler {
       return;
     }
 
-    // Check if we have all expected chunks
     if (info.receivedChunks < info.totalChunks) {
       this.callbacks.onTransferError(
         { id: transferId, fileName: info.fileName },
@@ -349,7 +404,6 @@ export class WebRTCHandler {
       return;
     }
 
-    // Assemble the file from chunks
     const orderedChunks: Uint8Array[] = [];
     let hasError = false;
 
@@ -370,11 +424,10 @@ export class WebRTCHandler {
       return;
     }
 
-    // Create final file blob with proper MIME type detection
     const fileExt = info.fileName.split(".").pop()?.toLowerCase() || "";
     let mimeType = "application/octet-stream";
 
-    // Set proper MIME type for common video formats
+    // Setting proper MIME type for common video formats
     if (["mp4", "mpeg", "mpg"].includes(fileExt)) mimeType = "video/mp4";
     if (["webm"].includes(fileExt)) mimeType = "video/webm";
     if (["mov", "qt"].includes(fileExt)) mimeType = "video/quicktime";
@@ -382,7 +435,6 @@ export class WebRTCHandler {
 
     const fileBlob = new Blob(orderedChunks, { type: mimeType });
 
-    // Notify completion
     this.callbacks.onTransferComplete({
       id: transferId,
       fileName: info.fileName,
@@ -391,10 +443,8 @@ export class WebRTCHandler {
       status: "completed",
     });
 
-    // Send file to the callback for download
     this.callbacks.onFileReceived(info.fileName, fileBlob);
 
-    // Clean up
     this.fileInfo.delete(transferId);
     this.fileChunks.delete(transferId);
   }
@@ -413,18 +463,33 @@ export class WebRTCHandler {
     }
   }
 
-  public async sendFile(file: File, targetId: string) {
-    // Generate a unique ID for this transfer
-    const transferId = this.generateUUID();
+  public async sendFile(
+    file: File,
+    targetId: string,
+    existingTransferId?: string,
+  ) {
+    const transferId = existingTransferId || this.generateUUID();
 
-    // Ensure we have a data channel
+    const transferTimeout = setTimeout(() => {
+      const transfer = this.fileInfo.get(transferId);
+      if (transfer && transfer.receivedChunks < transfer.totalChunks) {
+        this.callbacks.onTransferError(
+          { id: transferId, fileName: file.name },
+          "Transfer timed out - no progress",
+        );
+      }
+    }, 30000);
+
+    this.sendingTransfers.set(transferId, {
+      targetId,
+      fileName: file.name,
+    });
+
     let dataChannel = this.dataChannels.get(targetId);
 
     if (!dataChannel || dataChannel.readyState !== "open") {
-      // Create a new peer connection if needed
       const peerConnection = await this.createPeerConnection(targetId);
 
-      // Create data channel with ordered delivery
       dataChannel = peerConnection.createDataChannel(
         `file-transfer-${transferId}`,
         {
@@ -433,7 +498,7 @@ export class WebRTCHandler {
       );
       this.setupDataChannel(dataChannel, targetId);
 
-      // Create and send offer
+      // Creating and sending offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
@@ -445,7 +510,6 @@ export class WebRTCHandler {
         }),
       );
 
-      // Wait for data channel to open with timeout
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Timed out waiting for data channel to open"));
@@ -480,10 +544,9 @@ export class WebRTCHandler {
       status: "pending",
     });
 
-    // Calculate total chunks
+    // Calculating total chunks
     const totalChunks = Math.ceil(file.size / WebRTCHandler.CHUNK_SIZE);
 
-    // Send file info and wait for acknowledgment
     dataChannel.send(
       JSON.stringify({
         type: "file-info",
@@ -522,7 +585,7 @@ export class WebRTCHandler {
     });
 
     try {
-      // Track progress
+      // Tracking progress
       let sentChunks = 0;
       const updateProgress = () => {
         const progress = Math.round((sentChunks / totalChunks) * 100);
@@ -581,7 +644,7 @@ export class WebRTCHandler {
         // Small yield to allow UI updates
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
-
+      this.sendingTransfers.delete(transferId);
       // Completion code remains the same
       updateProgress();
       dataChannel.send(
@@ -598,15 +661,18 @@ export class WebRTCHandler {
         progress: 100,
         status: "completed",
       });
+      clearTimeout(transferTimeout);
     } catch (error) {
       // Error handling remains the same
       console.error("Error during file transfer:", error);
+      this.sendingTransfers.delete(transferId);
       this.callbacks.onTransferError(
         { id: transferId, fileName: file.name },
         error instanceof Error
           ? error.message
           : "Unknown error during transfer",
       );
+      clearTimeout(transferTimeout);
     }
   }
 
@@ -626,6 +692,7 @@ export class WebRTCHandler {
     this.dataChannels.clear();
     this.fileChunks.clear();
     this.fileInfo.clear();
+    this.sendingTransfers.clear();
 
     // Remove event listeners
     this.ws.removeEventListener("message", this.handleSignalingMessage);
