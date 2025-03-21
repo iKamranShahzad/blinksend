@@ -13,7 +13,13 @@ export interface FileTransfer {
 
   progress: number;
 
-  status: "pending" | "transferring" | "receiving" | "completed" | "error";
+  status:
+    | "pending"
+    | "transferring"
+    | "receiving"
+    | "completed"
+    | "error"
+    | "finalizing";
 }
 
 export interface FileTransferError {

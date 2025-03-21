@@ -13,29 +13,14 @@ export class WebRTCHandler {
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       {
-        urls: "stun:stun.relay.metered.ca:80",
-      },
-      {
-        urls: "turn:global.relay.metered.ca:80",
-        username: "9126f1ceb9f6fd4d1b9d1fe6",
-        credential: "VCdWbkdKQJ0cKIlD",
-      },
-      {
-        urls: "turn:global.relay.metered.ca:80?transport=tcp",
-        username: "9126f1ceb9f6fd4d1b9d1fe6",
-        credential: "VCdWbkdKQJ0cKIlD",
-      },
-      {
-        urls: "turn:global.relay.metered.ca:443",
-        username: "9126f1ceb9f6fd4d1b9d1fe6",
-        credential: "VCdWbkdKQJ0cKIlD",
-      },
-      {
-        urls: "turns:global.relay.metered.ca:443?transport=tcp",
-        username: "9126f1ceb9f6fd4d1b9d1fe6",
-        credential: "VCdWbkdKQJ0cKIlD",
+        urls: process.env.NEXT_PUBLIC_TURN_SERVER_URL || "",
+        username: process.env.NEXT_PUBLIC_TURN_SERVER_USERNAME || "",
+        credential: process.env.NEXT_PUBLIC_TURN_SERVER_CREDENTIAL || "",
       },
     ],
+    iceTransportPolicy: "all",
+    bundlePolicy: "max-bundle",
+    rtcpMuxPolicy: "require",
     iceCandidatePoolSize: 10,
   };
 
@@ -585,10 +570,11 @@ export class WebRTCHandler {
     });
 
     try {
-      // Tracking progress
-      let sentChunks = 0;
+      // Tracking progress based on receiver acknowledgments
+      let acknowledgedChunks = 0;
+
       const updateProgress = () => {
-        const progress = Math.round((sentChunks / totalChunks) * 100);
+        const progress = Math.round((acknowledgedChunks / totalChunks) * 100);
         this.callbacks.onTransferProgress({
           id: transferId,
           fileName: file.name,
@@ -597,6 +583,23 @@ export class WebRTCHandler {
           status: "transferring",
         });
       };
+
+      // Listen for acknowledgments from the receiver
+      const acknowledgmentHandler = (event: MessageEvent) => {
+        if (typeof event.data === "string") {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "chunk-ack" && data.transferId === transferId) {
+              acknowledgedChunks = data.receivedCount;
+              updateProgress();
+            }
+          } catch {
+            // Not JSON, ignore
+          }
+        }
+      };
+
+      dataChannel.addEventListener("message", acknowledgmentHandler);
 
       // Send file in chunks with better background tab support
       const sendChunk = async (index: number) => {
@@ -607,7 +610,6 @@ export class WebRTCHandler {
 
         // Check buffer state and wait if necessary
         while (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
-          // Use shorter intervals to recover faster when tab becomes active again
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
@@ -622,12 +624,6 @@ export class WebRTCHandler {
 
         // Send binary data immediately after metadata
         dataChannel.send(buffer);
-        sentChunks++;
-
-        // Update progress periodically
-        if (sentChunks % 5 === 0 || sentChunks === totalChunks) {
-          updateProgress();
-        }
       };
 
       // Process chunks in batches for better performance
@@ -644,9 +640,20 @@ export class WebRTCHandler {
         // Small yield to allow UI updates
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
+
       this.sendingTransfers.delete(transferId);
-      // Completion code remains the same
-      updateProgress();
+
+      // Wait for all chunks to be acknowledged before marking as completed
+      await new Promise<void>((resolve) => {
+        const acknowledgmentCheckInterval = setInterval(() => {
+          if (acknowledgedChunks === totalChunks) {
+            clearInterval(acknowledgmentCheckInterval);
+            resolve();
+          }
+        }, 100); // Check every 100ms
+      });
+
+      // Send "transfer-complete" message after all chunks are acknowledged
       dataChannel.send(
         JSON.stringify({
           type: "transfer-complete",
@@ -661,9 +668,10 @@ export class WebRTCHandler {
         progress: 100,
         status: "completed",
       });
+
       clearTimeout(transferTimeout);
+      dataChannel.removeEventListener("message", acknowledgmentHandler);
     } catch (error) {
-      // Error handling remains the same
       console.error("Error during file transfer:", error);
       this.sendingTransfers.delete(transferId);
       this.callbacks.onTransferError(
