@@ -146,7 +146,7 @@ const App: React.FC = () => {
   }, [ws, roomId]);
 
   useEffect(() => {
-    const websocket = new WebSocket("wss://blinksend-backend.onrender.com");
+    const websocket = new WebSocket(process.env.NEXT_PUBLIC_WEBSOCKET_URL!);
 
     toast.loading("Connecting to BlinkSend...", {
       id: "websocket-connection",
