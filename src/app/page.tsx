@@ -148,7 +148,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const websocket = new WebSocket(process.env.NEXT_PUBLIC_WEBSOCKET_URL!);
 
-    toast.loading("Connecting to BlinkSend...", {
+    toast.loading("Connecting to BlinkSend..", {
       id: "websocket-connection",
       duration: Infinity,
     });
