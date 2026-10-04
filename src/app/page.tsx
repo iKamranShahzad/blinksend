@@ -1,399 +1,546 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
-import { Device, FileTransfer } from "../types/types";
-import { detectDeviceType } from "../utils/deviceDetection";
+
+import React, { useEffect, useRef, useState } from "react";
+import Image from "next/image";
+import { toast } from "sonner";
+import { Moon, Sun, Hash, LogOut, Copy, Link } from "lucide-react";
+import { RoomJoin } from "../components/RoomJoin";
 import { DeviceList } from "../components/DeviceList";
+import { ConnectionIndicator } from "../components/ConnectionIndicator";
+import { RoomInvitation, RoomQRShortcut } from "../components/RoomSharing";
 import { FileUpload } from "../components/FileUpload";
 import { TransferProgress } from "../components/TransferProgress";
-import Image from "next/image";
-import { RoomJoin } from "@/components/RoomJoin";
-import { Sun, Moon, LogOut, Hash } from "lucide-react";
-import { toast } from "sonner";
-import { WebRTCHandler } from "@/utils/webRTCHandler";
+import { TransferHistory } from "../components/TransferHistory";
+import type { ConnectionStatus, Device, FileTransfer } from "../types/types";
+import { WebRTCHandler } from "../utils/webRTCHandler";
+import { SignalingClient } from "../utils/signalingClient";
+import { TransferQueue } from "../utils/transferQueue";
+import { acquireBrowserSession } from "../utils/browserSession";
+import { detectDeviceType } from "../utils/deviceDetection";
 
+interface Services {
+  client: SignalingClient;
+  handler: WebRTCHandler;
+  queue: TransferQueue;
+  leave: () => void;
+}
 const App: React.FC = () => {
   const [devices, setDevices] = useState<Device[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<FileTransfer[]>([]);
-  const [ws, setWs] = useState<WebSocket | null>(null);
   const [selfName, setSelfName] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
+  const [invitationUrl, setInvitationUrl] = useState("");
   const [theme, setTheme] = useState("light");
-  const webRTCHandlerRef = useRef<WebRTCHandler | null>(null);
+  const [connection, setConnection] = useState<ConnectionStatus>("connecting");
+  const [connectionError, setConnectionError] = useState("");
+  const [roomReady, setRoomReady] = useState(false);
+  const [roomPending, setRoomPending] = useState(false);
+  const [roomError, setRoomError] = useState("");
+  const [peerStatuses, setPeerStatuses] = useState<Record<string, string>>({});
+  const servicesRef = useRef<Services | null>(null);
+  const roomRef = useRef<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  const peersRef = useRef<Device[]>([]);
+  const confirmedRef = useRef(false);
+  const requestTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const selectedDevice = devices.find((device) => device.id === selectedId);
+  const hasRoomContent = Boolean(
+    roomId && (devices.length || transfers.length),
+  );
+  const hasOnlinePeers = devices.some((device) => device.online !== false);
 
   useEffect(() => {
-    const storedTheme = localStorage.getItem("theme");
-    if (storedTheme) {
-      setTheme(storedTheme);
-      document.documentElement.classList.add(storedTheme);
+    try {
+      const stored = localStorage.getItem("theme");
+      if (stored === "light" || stored === "dark") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Restore a browser preference after hydration.
+        setTheme(stored);
+        document.documentElement.classList.toggle("dark", stored === "dark");
+      }
+    } catch {
+      // Restricted storage should not prevent joining a room.
     }
+  }, []);
+
+  useEffect(() => {
+    const sessionAbort = new AbortController();
+    let disposeServices: (() => void) | undefined;
+    void acquireBrowserSession({ signal: sessionAbort.signal }).then(
+      (session) => {
+        if (!session) return;
+        if (sessionAbort.signal.aborted) {
+          void session.release();
+          return;
+        }
+        let handler: WebRTCHandler;
+        const downloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const update = (transfer: FileTransfer) =>
+          setTransfers((previous) => {
+            const existing = previous.some((entry) => entry.id === transfer.id);
+            return existing
+              ? previous.map((entry) =>
+                  entry.id === transfer.id ? { ...entry, ...transfer } : entry,
+                )
+              : [...previous, transfer];
+          });
+        const client = new SignalingClient(
+          process.env.NEXT_PUBLIC_WEBSOCKET_URL || "",
+          session.id,
+          detectDeviceType(),
+          (status, message) => {
+            setConnection(status);
+            setConnectionError(message || "");
+            if (status !== "connected") {
+              confirmedRef.current = false;
+              setRoomReady(false);
+            }
+          },
+          { resumeToken: session.resumeToken, onSession: session.save },
+        );
+        const queue = new TransferQueue(
+          (job, signal) =>
+            handler.sendFile(
+              job.file,
+              job.transfer.peerId!,
+              job.transfer.id,
+              signal,
+            ),
+          (peerId) =>
+            client.connected &&
+            confirmedRef.current &&
+            peersRef.current.some(
+              (peer) => peer.id === peerId && peer.online !== false,
+            ),
+          update,
+        );
+        const createHandler = () =>
+          new WebRTCHandler(client, {
+            onTransferProgress: (transfer) => queue.report(transfer),
+            onPeerStatus: (id, status) =>
+              setPeerStatuses((previous) => ({ ...previous, [id]: status })),
+            onFileReceived: (fileName, data) => {
+              const url = URL.createObjectURL(data);
+              const anchor = document.createElement("a");
+              anchor.href = url;
+              anchor.download = fileName;
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              downloadTimers.set(
+                url,
+                setTimeout(() => {
+                  URL.revokeObjectURL(url);
+                  downloadTimers.delete(url);
+                }, 60000),
+              );
+            },
+          });
+        handler = createHandler();
+        const services: Services = {
+          client,
+          queue,
+          handler,
+          leave: () => {
+            applyRoom(null);
+            if (client.connected) client.send({ type: "leave-room" });
+            setRoomError("");
+          },
+        };
+        servicesRef.current = services;
+        const applyRoom = (next: string | null) => {
+          if (next !== roomRef.current) {
+            queue.clear();
+            handler.cleanup();
+            handler = createHandler();
+            services.handler = handler;
+            peersRef.current = [];
+            selectedRef.current = null;
+            setDevices([]);
+            setSelectedId(null);
+            setTransfers([]);
+            setPeerStatuses({});
+          }
+          roomRef.current = next;
+          client.setRoom(next);
+          confirmedRef.current = true;
+          setRoomReady(true);
+          setRoomId(next);
+          if (next) {
+            const url = new URL(window.location.href);
+            url.searchParams.set("room", next);
+            url.hash = "";
+            setInvitationUrl(url.toString());
+          } else setInvitationUrl("");
+        };
+        const finishRequest = () => {
+          clearTimeout(requestTimer.current);
+          setRoomPending(false);
+        };
+        let invitationUsed = false;
+        const unsubscribe = client.subscribe((message) => {
+          switch (message.type) {
+            case "self-identity":
+              setSelfName(message.name!);
+              if (message.roomId) applyRoom(message.roomId);
+              else if (!roomRef.current) {
+                confirmedRef.current = true;
+                setRoomReady(true);
+              }
+              if (!invitationUsed) {
+                invitationUsed = true;
+                const invitation = new URL(
+                  window.location.href,
+                ).searchParams.get("room");
+                if (
+                  invitation &&
+                  /^\d{5}$/.test(invitation) &&
+                  invitation !== roomRef.current
+                ) {
+                  client.send({ type: "join-room", roomId: invitation });
+                  setRoomPending(true);
+                  requestTimer.current = setTimeout(() => {
+                    setRoomPending(false);
+                    setRoomError("Could not join the invitation. Try again.");
+                    if (roomRef.current)
+                      toast.error("Could not join the invitation. Try again.");
+                  }, 10000);
+                }
+              }
+              queue.wake();
+              handler.recoverConnections();
+              break;
+            case "room-created":
+            case "room-joined":
+              applyRoom(message.roomId!);
+              finishRequest();
+              setRoomError("");
+              toast.success(
+                message.type === "room-created"
+                  ? "Room " + message.roomId + " created"
+                  : "Joined room " + message.roomId,
+              );
+              break;
+            case "room-left":
+              applyRoom(null);
+              break;
+            case "devices": {
+              if (!roomRef.current) break;
+              const peers = message.devices!;
+              peersRef.current = peers;
+              handler.setPeers(peers);
+              setDevices(peers);
+              if (
+                selectedRef.current &&
+                !peers.some((peer) => peer.id === selectedRef.current)
+              ) {
+                selectedRef.current = null;
+                setSelectedId(null);
+                toast.info("The selected device left the room");
+              }
+              queue.invalidatePeers(peers);
+              break;
+            }
+            case "error":
+              if (
+                message.requestType === "create-room" ||
+                message.requestType === "join-room"
+              ) {
+                finishRequest();
+                setRoomError(message.message || "Could not enter this room");
+                if (roomRef.current && confirmedRef.current)
+                  toast.error(message.message || "Could not enter this room");
+                if (
+                  message.code === "room-not-found" &&
+                  roomRef.current &&
+                  !confirmedRef.current
+                ) {
+                  applyRoom(null);
+                  toast.info(
+                    "Your previous room expired. Create or join a room.",
+                  );
+                }
+              }
+              break;
+          }
+        });
+        client.start();
+        disposeServices = () => {
+          clearTimeout(requestTimer.current);
+          unsubscribe();
+          queue.dispose();
+          handler.cleanup();
+          client.stop();
+          for (const [url, timer] of downloadTimers) {
+            clearTimeout(timer);
+            URL.revokeObjectURL(url);
+          }
+          servicesRef.current = null;
+          void session.release();
+        };
+      },
+    );
+    return () => {
+      sessionAbort.abort();
+      disposeServices?.();
+    };
   }, []);
 
   const toggleTheme = () => {
-    const newTheme = theme === "light" ? "dark" : "light";
-
-    document.documentElement.classList.remove(theme);
-    document.documentElement.classList.add(newTheme);
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    document.documentElement.classList.toggle("dark", next === "dark");
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      // Theme switching still works for this page without persistence.
+    }
   };
-
-  const generateUUID = (): string => {
-    if ("randomUUID" in crypto) {
-      return crypto.randomUUID();
-    } else {
-      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
-        (
-          parseInt(c, 10) ^
-          (crypto.getRandomValues(new Uint8Array(1))[0] &
-            (15 >> (parseInt(c, 10) / 4)))
-        ).toString(16),
+  const requestRoom = (type: "create-room" | "join-room", code?: string) => {
+    try {
+      servicesRef.current?.client.send({ type, roomId: code });
+      setRoomPending(true);
+      setRoomError("");
+      clearTimeout(requestTimer.current);
+      requestTimer.current = setTimeout(() => {
+        setRoomPending(false);
+        setRoomError("The server did not respond. Try again.");
+      }, 10000);
+    } catch (error) {
+      setRoomError(error instanceof Error ? error.message : "Not connected");
+    }
+  };
+  const leaveRoom = () => {
+    servicesRef.current?.leave();
+    const url = new URL(window.location.href);
+    url.searchParams.delete("room");
+    window.history.replaceState(null, "", url);
+  };
+  const copyRoom = async (invitation = false) => {
+    if (!roomId) return;
+    try {
+      await navigator.clipboard.writeText(invitation ? invitationUrl : roomId);
+      toast.success(invitation ? "Invitation link copied" : "Room code copied");
+    } catch {
+      toast.error(
+        "Could not copy. You can select and copy the room code above.",
       );
     }
   };
-
-  const handleCreateRoom = () => {
-    if (ws) {
-      ws.send(
-        JSON.stringify({
-          type: "create-room",
-        }),
-      );
-    }
+  const selectDevice = (device: Device) => {
+    selectedRef.current = device.id;
+    setSelectedId(device.id);
   };
-
-  const handleJoinRoom = (id: string) => {
-    if (ws) {
-      ws.send(
-        JSON.stringify({
-          type: "join-room",
-          roomId: id,
-        }),
-      );
-    }
+  const handleFileSelect = (files: File[]) => {
+    if (
+      !selectedDevice ||
+      !servicesRef.current ||
+      !roomReady ||
+      !servicesRef.current.client.connected
+    )
+      return;
+    servicesRef.current.queue.enqueue(files, selectedDevice);
   };
-
-  const handleLeaveRoom = () => {
-    if (!ws || !roomId) return;
-
-    if (webRTCHandlerRef.current) {
-      webRTCHandlerRef.current.cleanup();
-      webRTCHandlerRef.current = null;
-    }
-
-    ws.send(
-      JSON.stringify({
-        type: "leave-room",
-        roomId: roomId,
-      }),
-    );
-
-    setRoomId(null);
-    setSelectedDevice(null);
-    setDevices([]);
-    setTransfers([]);
+  const cancelTransfer = (transfer: FileTransfer) => {
+    if (transfer.direction === "send")
+      servicesRef.current?.queue.cancel(transfer.id);
+    else servicesRef.current?.handler.cancelTransfer(transfer.id);
   };
-
-  useEffect(() => {
-    if (!ws) return;
-    if (roomId && !webRTCHandlerRef.current) {
-      // WebRTC initialization dawgg
-      webRTCHandlerRef.current = new WebRTCHandler(ws, {
-        onTransferProgress: (transfer) => {
-          setTransfers((prev) => {
-            const existingTransfer = prev.find((t) => t.id === transfer.id);
-            if (existingTransfer) {
-              return prev.map((t) => (t.id === transfer.id ? transfer : t));
-            } else {
-              return [...prev, transfer];
-            }
-          });
-        },
-        onTransferComplete: (transfer) => {
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id
-                ? { ...t, progress: 100, status: "completed" }
-                : t,
-            ),
-          );
-        },
-        onTransferError: (transfer, error) => {
-          console.error(`Transfer error for ${transfer.fileName}: ${error}`);
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transfer.id ? { ...t, status: "error" } : t,
-            ),
-          );
-        },
-        onFileReceived: (fileName, fileData) => {
-          const url = URL.createObjectURL(fileData);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = fileName;
-          a.click();
-          URL.revokeObjectURL(url);
-        },
-      });
-    }
-
-    return () => {
-      if (webRTCHandlerRef.current) {
-        webRTCHandlerRef.current.cleanup();
-        webRTCHandlerRef.current = null;
-      }
-    };
-  }, [ws, roomId]);
-
-  useEffect(() => {
-    const websocket = new WebSocket(process.env.NEXT_PUBLIC_WEBSOCKET_URL!);
-
-    toast.loading("Connecting to BlinkSend..", {
-      id: "websocket-connection",
-      duration: Infinity,
-    });
-
-    websocket.onopen = () => {
-      toast.success("Connected! Happy file sharing!", {
-        id: "websocket-connection",
-        duration: 2000,
-      });
-
-      websocket.send(
-        JSON.stringify({
-          type: "register",
-          device: {
-            id: generateUUID(),
-            name: navigator.platform,
-            type: detectDeviceType(),
-          },
-        }),
-      );
-    };
-
-    websocket.onclose = () => {
-      toast.error("Disconnected from the server", {
-        id: "websocket-connection",
-      });
-    };
-
-    websocket.onerror = () => {
-      toast.error("Connection error", {
-        id: "websocket-connection",
-      });
-    };
-
-    websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      switch (data.type) {
-        case "room-created":
-          setRoomId(data.roomId);
-          toast.success(`You created room ${data.roomId}`);
-          break;
-        case "room-joined":
-          setRoomId(data.roomId);
-          toast.success(`You joined room ${data.roomId}`);
-          break;
-        case "room-error":
-          toast.error(data.message);
-          break;
-        case "room-left":
-          setRoomId(null);
-          setSelectedDevice(null);
-          setDevices([]);
-          toast.success(`You left the room ${data.roomId}`);
-          break;
-        case "self-identity":
-          setSelfName(data.name);
-          break;
-        case "devices":
-          setDevices(data.devices);
-          break;
-        case "device-joined":
-          toast.info(`${data.deviceName} joined the room`, {
-            icon: "👋",
-          });
-          break;
-        case "device-left":
-          toast.info(`${data.deviceName} left the room`, {
-            icon: "👋",
-          });
-          break;
-        // Other WebSocket messages, later baby
-      }
-    };
-
-    setWs(websocket);
-
-    return () => {
-      websocket.close();
-      toast.dismiss("websocket-connection");
-    };
-  }, []);
-
-  useEffect(() => {
-    if (selectedDevice) {
-      const deviceStillExists = devices.some(
-        (device) => device.id === selectedDevice.id,
-      );
-
-      if (!deviceStillExists) {
-        setSelectedDevice(null);
-        toast.warning("The selected device has disconnected", {
-          description: "Please select another device to continue.",
-        });
-      }
-    }
-  }, [devices, selectedDevice]);
-
-  const handleFileSelect = async (files: File[]) => {
-    if (!selectedDevice || !webRTCHandlerRef.current) return;
-
-    if (files.length > 1) {
-      toast.info(`Preparing to send ${files.length} files`);
-    }
-
-    for (const file of files) {
-      try {
-        const transferId = generateUUID();
-
-        const pendingTransfer: FileTransfer = {
-          id: transferId,
-          fileName: file.name,
-          fileSize: file.size,
-          progress: 0,
-          status: "pending",
-        };
-
-        setTransfers((prev) => [...prev, pendingTransfer]);
-
-        await webRTCHandlerRef.current.sendFile(
-          file,
-          selectedDevice.id,
-          transferId,
-        );
-      } catch (error) {
-        console.error(`Failed to send file ${file.name}:`, error);
-
-        const errorTransfer: FileTransfer = {
-          id: generateUUID(),
-          fileName: file.name,
-          fileSize: file.size,
-          progress: 0,
-          status: "error",
-        };
-
-        setTransfers((prev) => [...prev, errorTransfer]);
-      }
-    }
+  const removeTransfer = (id: string) => {
+    servicesRef.current?.queue.remove(id);
+    setTransfers((previous) => previous.filter((entry) => entry.id !== id));
   };
-
-  const handleRemoveTransfer = (id: string) => {
-    setTransfers((prev) => prev.filter((t) => t.id !== id));
-  };
-
   return (
-    <div>
+    <div className="flex min-h-dvh flex-col bg-gray-50 pt-8 dark:bg-zinc-900">
+      <ConnectionIndicator
+        status={connection}
+        restoring={Boolean(roomId && !roomReady)}
+        error={connectionError}
+        onRetry={() => servicesRef.current?.client.retryNow()}
+      />
       <button
         onClick={toggleTheme}
-        className="fixed bottom-4 right-4 z-50 rounded-full bg-gray-200 p-2 shadow-md dark:bg-zinc-600 sm:bottom-auto sm:right-4 sm:top-4"
+        aria-label={
+          theme === "light" ? "Switch to dark theme" : "Switch to light theme"
+        }
+        className="fixed top-[max(1rem,env(safe-area-inset-top))] right-4 z-50 flex size-11 items-center justify-center rounded-full bg-gray-200 shadow-md dark:bg-zinc-600"
       >
-        {theme === "light" ? <Sun /> : <Moon />}
+        {theme === "light" ? (
+          <Sun aria-hidden="true" />
+        ) : (
+          <Moon aria-hidden="true" />
+        )}
       </button>
-      <div className="min-h-screen bg-gray-50 py-8 dark:bg-zinc-900">
-        <div className="mx-auto max-w-4xl px-4">
-          <header className="relative z-10 mb-8 flex flex-col items-center justify-center gap-1">
-            <Image
-              priority={true}
-              width={512}
-              height={512}
-              className="mt-2 w-48"
-              src={theme === "light" ? "/Logo.webp" : "/LogoDark.webp"}
-              alt="BlinkSend Logo"
-            />
-            <p className="text-center text-gray-600 dark:text-neutral-300">
-              Share files securely with devices on your browser
-            </p>
-            <p className="mt-2 text-sm text-gray-500 dark:text-neutral-400">
-              You&apos;re being discovered by the name{" "}
-              <strong>{selfName}</strong>{" "}
-              {selfName === null && (
-                <span className="loader">
-                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                </span>
-              )}
-            </p>
-            {roomId && (
-              <div className="mt-3 flex items-center gap-3">
-                <div className="flex items-center rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 shadow-sm ring-1 ring-inset ring-blue-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:ring-indigo-800">
-                  <Hash size={14} className="mr-1.5" />
-                  {roomId}
-                </div>
-                <button
-                  onClick={handleLeaveRoom}
-                  className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 shadow-sm transition-colors hover:bg-rose-100 hover:text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 dark:hover:text-rose-300"
-                  title="Leave Room"
-                >
-                  <LogOut size={14} strokeWidth={2.5} />
-                </button>
-              </div>
+      <div
+        className={`mx-auto w-full max-w-4xl px-4 pb-12 ${hasRoomContent ? "room-content" : ""}`}
+      >
+        <header className="relative z-10 mb-8 flex flex-col items-center justify-center gap-1">
+          <Image
+            priority
+            width={512}
+            height={512}
+            className="mt-2 w-48"
+            src={theme === "light" ? "/Logo.webp" : "/LogoDark.webp"}
+            alt="BlinkSend Logo"
+          />
+          <p className="text-center text-gray-600 dark:text-neutral-300">
+            Share files securely with devices on your browser
+          </p>
+          <p
+            aria-live="polite"
+            className="mt-1 text-center text-sm text-gray-500 dark:text-neutral-400"
+          >
+            You&apos;re being discovered by the name{" "}
+            {selfName ? (
+              <strong>{selfName}</strong>
+            ) : (
+              <span
+                className="loader inline-block h-3! w-10 align-middle"
+                aria-label="Loading your device name"
+              >
+                <span className="sr-only">Loading your device name</span>
+              </span>
             )}
-          </header>
-
-          {!roomId ? (
-            <RoomJoin
-              onCreateRoom={handleCreateRoom}
-              onJoinRoom={handleJoinRoom}
-            />
-          ) : (
-            <>
-              <section className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-300">
+          </p>
+          {roomId && devices.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={() => void copyRoom()}
+                title="Copy room code"
+                aria-label={"Copy room code " + roomId}
+                className="flex min-h-11 items-center gap-2 rounded-full bg-blue-50 px-4 text-sm font-medium text-blue-700 ring-1 ring-blue-200 ring-inset dark:bg-indigo-950/40 dark:text-indigo-300 dark:ring-indigo-800"
+              >
+                <Hash size={14} aria-hidden="true" />
+                {roomId}
+                <Copy size={14} aria-hidden="true" />
+              </button>
+              <button
+                onClick={() => void copyRoom(true)}
+                className="flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm text-blue-700 hover:bg-blue-50 dark:text-indigo-200 dark:hover:bg-neutral-800"
+              >
+                <Link size={16} aria-hidden="true" />
+                Invite link
+              </button>
+              <button
+                onClick={leaveRoom}
+                aria-label="Leave Room"
+                title="Leave Room"
+                className="flex size-11 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-900/30 dark:text-rose-300"
+              >
+                <LogOut size={18} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+        </header>
+        {!roomId ? (
+          <RoomJoin
+            onCreateRoom={() => requestRoom("create-room")}
+            onJoinRoom={(id) => requestRoom("join-room", id)}
+            disabled={connection !== "connected" || roomPending}
+            pending={roomPending}
+            error={roomError}
+          />
+        ) : (
+          <div>
+            <section className="mb-8">
+              <div className="mb-4 flex min-h-8 items-center justify-between gap-4">
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-300">
                   Available Devices
                 </h2>
-                <DeviceList
-                  devices={devices}
-                  selectedDevice={selectedDevice}
-                  onDeviceSelect={setSelectedDevice}
+                {devices.length === 0 && (
+                  <button
+                    onClick={leaveRoom}
+                    aria-label="Leave Room"
+                    title="Leave Room"
+                    className="flex size-11 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-900/30 dark:text-rose-300"
+                  >
+                    <LogOut size={18} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {devices.length === 0 ? (
+                <RoomInvitation
                   roomId={roomId}
+                  invitationUrl={invitationUrl}
+                  onCopyCode={() => void copyRoom()}
+                  onCopyLink={() => void copyRoom(true)}
                 />
-              </section>
-
+              ) : (
+                <div className="max-h-48 overflow-y-auto pr-1">
+                  <DeviceList
+                    devices={devices}
+                    selectedDevice={selectedDevice || null}
+                    onDeviceSelect={selectDevice}
+                    peerStatuses={peerStatuses}
+                  />
+                </div>
+              )}
+            </section>
+            {hasOnlinePeers && (
               <section className="mb-8">
                 <FileUpload
                   onFileSelect={handleFileSelect}
-                  disabled={!selectedDevice}
+                  disabled={
+                    !selectedDevice ||
+                    selectedDevice.online === false ||
+                    connection !== "connected" ||
+                    !roomReady ||
+                    roomPending
+                  }
+                  disabledLabel={
+                    connection !== "connected" || !roomReady
+                      ? "Waiting for connection…"
+                      : selectedDevice?.online === false
+                        ? "Recipient is reconnecting…"
+                        : "Select a device first"
+                  }
                 />
               </section>
-
-              {transfers.length > 0 && (
-                <section>
-                  <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-300">
-                    Transfers
-                  </h2>
-                  <div
-                    className="max-h-72 space-y-2 lg:max-h-44"
-                    style={{
-                      scrollbarWidth: "none",
-                      overflowY: "auto",
-                    }}
-                  >
-                    {transfers.map((transfer) => (
+            )}
+            {hasRoomContent && (
+              <div className="transfer-history-slot flex min-h-0">
+                {transfers.length > 0 && (
+                  <TransferHistory
+                    transfers={transfers}
+                    renderTransfer={(transfer, view) => (
                       <TransferProgress
                         key={transfer.id}
                         transfer={transfer}
-                        onRemove={handleRemoveTransfer}
+                        view={view}
+                        onRemove={removeTransfer}
+                        onCancel={() => cancelTransfer(transfer)}
+                        onRetry={() =>
+                          servicesRef.current?.queue.retry(transfer.id)
+                        }
+                        retryDisabled={
+                          connection !== "connected" ||
+                          !devices.some(
+                            (peer) =>
+                              peer.id === transfer.peerId &&
+                              peer.online !== false,
+                          )
+                        }
+                        onPause={(paused) =>
+                          servicesRef.current?.handler.pauseTransfer(
+                            transfer.id,
+                            paused,
+                          )
+                        }
                       />
-                    ))}
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-        </div>
+                    )}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      {roomId && devices.length > 0 && (
+        <RoomQRShortcut roomId={roomId} invitationUrl={invitationUrl} />
+      )}
     </div>
   );
 };
-
 export default App;

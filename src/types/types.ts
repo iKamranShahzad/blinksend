@@ -2,6 +2,7 @@ export interface Device {
   id: string;
   name: string;
   type: string;
+  online?: boolean;
 }
 
 export interface FileTransfer {
@@ -19,7 +20,38 @@ export interface FileTransfer {
     | "receiving"
     | "completed"
     | "error"
-    | "finalizing";
+    | "finalizing"
+    | "queued"
+    | "paused"
+    | "cancelled";
+  direction?: "send" | "receive";
+  peerId?: string;
+  peerName?: string;
+  transferredBytes?: number;
+  bytesPerSecond?: number;
+  remainingSeconds?: number;
+  error?: string;
+}
+
+export type ConnectionStatus =
+  "connecting" | "connected" | "reconnecting" | "offline" | "error";
+
+export interface SignalMessage {
+  type: string;
+  id?: string;
+  name?: string;
+  roomId?: string | null;
+  resumeToken?: string;
+  protocolVersion?: number;
+  devices?: Device[];
+  from?: string;
+  to?: string;
+  sdp?: string;
+  candidate?: RTCIceCandidateInit;
+  code?: string;
+  message?: string;
+  requestType?: string;
+  deviceName?: string;
 }
 
 export interface FileTransferError {

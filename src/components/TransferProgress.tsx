@@ -1,127 +1,226 @@
-import React, { useState, useEffect } from "react";
-import { FileTransfer } from "../types/types";
-import { X, File, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
+import type { FileTransfer } from "../types/types";
+import type { TransferView } from "./TransferHistory";
+import {
+  X,
+  File,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  Pause,
+  Play,
+} from "lucide-react";
+import { formatFileSize } from "../utils/fileUtils";
 
 interface TransferProgressProps {
   transfer: FileTransfer;
+  view?: TransferView;
   onRemove?: (id: string) => void;
+  onCancel?: () => void;
+  onRetry?: () => void;
+  onPause?: (paused: boolean) => void;
+  retryDisabled?: boolean;
 }
 
-export const TransferProgress: React.FC<TransferProgressProps> = ({
+export function TransferProgress({
   transfer,
+  view = "list",
   onRemove,
-}) => {
-  const [showRemoveButton, setShowRemoveButton] = useState(false);
-  const [animateProgress, setAnimateProgress] = useState(false);
-
-  useEffect(() => {
-    if (transfer.status === "transferring") {
-      setAnimateProgress(true);
-      const timer = setTimeout(() => setAnimateProgress(false), 700);
-      return () => clearTimeout(timer);
-    }
-  }, [transfer.progress, transfer.status]);
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    if (bytes < 1024 * 1024 * 1024)
-      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+  onCancel,
+  onRetry,
+  onPause,
+  retryDisabled,
+}: TransferProgressProps) {
+  const finished = ["completed", "error", "cancelled"].includes(
+    transfer.status,
+  );
+  const active = [
+    "pending",
+    "transferring",
+    "receiving",
+    "finalizing",
+  ].includes(transfer.status);
+  const labels: Record<FileTransfer["status"], string> = {
+    queued: "Queued",
+    pending: "Connecting",
+    transferring: "Sending",
+    receiving: "Receiving",
+    finalizing: "Verifying",
+    completed: "Completed",
+    error: "Failed",
+    cancelled: "Cancelled",
+    paused: transfer.direction === "receive" ? "Sender paused" : "Paused",
   };
-
-  const isFinished =
-    transfer.status === "completed" || transfer.status === "error";
-
-  const fileExtension = transfer.fileName.split(".").pop()?.toLowerCase() || "";
-
-  const getFileColor = () => {
-    const imageTypes = ["jpg", "jpeg", "png", "gif", "webp"];
-    const documentTypes = ["pdf", "doc", "docx", "txt", "xlsx"];
-    const videoTypes = ["mp4", "mov", "avi", "webm"];
-
-    if (imageTypes.includes(fileExtension)) return "text-blue-500";
-    if (documentTypes.includes(fileExtension)) return "text-orange-500";
-    if (videoTypes.includes(fileExtension)) return "text-purple-500";
-    return "text-gray-500";
-  };
-
+  const actionClass =
+    "flex size-11 shrink-0 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 sm:size-8 dark:text-gray-300 dark:hover:bg-zinc-700";
+  const status = (
+    <span
+      role="status"
+      className={
+        "inline-flex shrink-0 items-center gap-1.5 text-xs " +
+        (transfer.status === "error"
+          ? "text-red-600 dark:text-red-400"
+          : transfer.status === "completed"
+            ? "text-green-600 dark:text-green-400"
+            : transfer.status === "cancelled"
+              ? "text-gray-500 dark:text-zinc-400"
+              : "text-blue-700 dark:text-blue-400")
+      }
+    >
+      {transfer.status === "completed" ? (
+        <CheckCircle2 size={14} aria-hidden="true" />
+      ) : transfer.status === "error" ? (
+        <AlertCircle size={14} aria-hidden="true" />
+      ) : active ? (
+        <RefreshCw
+          size={14}
+          aria-hidden="true"
+          className="animate-spin motion-reduce:animate-none"
+        />
+      ) : null}
+      {labels[transfer.status]}
+      {["transferring", "receiving"].includes(transfer.status) &&
+        " · " + transfer.progress + "%"}
+    </span>
+  );
   return (
     <div
-      className="relative rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-all duration-200 hover:shadow-md dark:border-zinc-700 dark:bg-zinc-800/50"
-      onMouseEnter={() => isFinished && setShowRemoveButton(true)}
-      onMouseLeave={() => setShowRemoveButton(false)}
+      role="listitem"
+      className={
+        view === "grid"
+          ? "relative min-w-0 rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50"
+          : "relative min-w-0 px-2 py-2"
+      }
     >
-      <div className="mb-3 flex items-start gap-3">
-        <div className={`mt-0.5 shrink-0 ${getFileColor()}`}>
-          <File size={20} />
-        </div>
-
+      <div className="flex items-center gap-2">
+        <File
+          size={16}
+          aria-hidden="true"
+          className="shrink-0 text-blue-600 dark:text-blue-400"
+        />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between">
-            <div className="truncate font-medium text-gray-900 dark:text-gray-200">
-              {transfer.fileName}
-            </div>
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 sm:ml-2 sm:mt-0">
-              {formatFileSize(transfer.fileSize)}
-            </div>
-          </div>
-
-          <div className="mt-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              {transfer.status === "transferring" && (
-                <RefreshCw size={14} className="animate-spin text-blue-500" />
-              )}
-              {transfer.status === "completed" && (
-                <CheckCircle2 size={14} className="text-green-500" />
-              )}
-              {transfer.status === "error" && (
-                <AlertCircle size={14} className="text-red-500" />
-              )}
-              <div
-                className={`text-xs font-medium ${
-                  transfer.status === "completed"
-                    ? "text-green-600 dark:text-green-400"
-                    : transfer.status === "error"
-                      ? "text-red-600 dark:text-red-400"
-                      : "text-blue-600 dark:text-blue-400"
-                }`}
-              >
-                {transfer.status === "transferring"
-                  ? `${transfer.progress}%`
-                  : transfer.status.charAt(0).toUpperCase() +
-                    transfer.status.slice(1)}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {(showRemoveButton || isFinished) && onRemove && (
-          <button
-            onClick={() => onRemove(transfer.id)}
-            className="right-3 top-3 rounded-full p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-zinc-700"
-            aria-label="Remove"
-            title="Remove from list"
+          <p
+            title={transfer.fileName}
+            className="truncate text-sm font-medium text-gray-900 dark:text-gray-200"
           >
-            <X size={16} className="text-gray-500 dark:text-gray-400" />
-          </button>
-        )}
+            {transfer.fileName}
+          </p>
+          <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-zinc-400">
+            {formatFileSize(transfer.fileSize)}
+            {transfer.peerName &&
+              " · " +
+                (transfer.direction === "receive" ? "From " : "To ") +
+                transfer.peerName}
+          </p>
+        </div>
+        {view === "list" && <div className="hidden sm:block">{status}</div>}
+        <div className="flex shrink-0 items-center gap-1">
+          {transfer.direction === "send" &&
+            ["transferring", "paused"].includes(transfer.status) &&
+            onPause && (
+              <button
+                onClick={() => onPause(transfer.status !== "paused")}
+                aria-label={
+                  (transfer.status === "paused" ? "Resume " : "Pause ") +
+                  transfer.fileName
+                }
+                title={transfer.status === "paused" ? "Resume" : "Pause"}
+                className={actionClass}
+              >
+                {transfer.status === "paused" ? (
+                  <Play size={15} aria-hidden="true" />
+                ) : (
+                  <Pause size={15} aria-hidden="true" />
+                )}
+              </button>
+            )}
+          {!finished && onCancel && (
+            <button
+              onClick={onCancel}
+              aria-label={"Cancel " + transfer.fileName}
+              title="Cancel"
+              className={actionClass}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          )}
+          {transfer.direction === "send" &&
+            ["error", "cancelled"].includes(transfer.status) &&
+            onRetry && (
+              <button
+                onClick={onRetry}
+                disabled={retryDisabled}
+                aria-label={"Retry " + transfer.fileName}
+                title="Retry"
+                className={actionClass}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+              </button>
+            )}
+          {finished && onRemove && (
+            <button
+              onClick={() => onRemove(transfer.id)}
+              aria-label={"Remove " + transfer.fileName}
+              title="Remove from list"
+              className={actionClass}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
-
-      <div className="h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-zinc-700">
+      {(view === "grid" || !finished) && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          {view === "grid" ? (
+            status
+          ) : (
+            <span className="sm:hidden">{status}</span>
+          )}
+          {active && (transfer.bytesPerSecond || 0) > 0 && (
+            <span className="ml-auto text-xs text-gray-500 dark:text-zinc-400">
+              {formatFileSize(
+                Math.max(1, Math.round(transfer.bytesPerSecond!)),
+              )}
+              /s
+              {transfer.remainingSeconds !== undefined &&
+                " · " +
+                  (transfer.remainingSeconds < 60
+                    ? transfer.remainingSeconds + "s"
+                    : Math.ceil(transfer.remainingSeconds / 60) + "m") +
+                  " left"}
+            </span>
+          )}
+        </div>
+      )}
+      {view === "list" && finished && (
+        <div className="mt-1 sm:hidden">{status}</div>
+      )}
+      {transfer.error && (
+        <p
+          title={transfer.error}
+          className="mt-1 line-clamp-2 text-xs break-words text-red-600 dark:text-red-400"
+        >
+          {transfer.error}
+        </p>
+      )}
+      <div
+        role="progressbar"
+        aria-label={transfer.fileName + " progress"}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={transfer.progress}
+        className={
+          finished
+            ? "sr-only"
+            : "mt-2 h-1 overflow-hidden rounded-full bg-gray-200 dark:bg-zinc-700"
+        }
+      >
         <div
-          className={`h-full transition-all duration-500 ${
-            transfer.status === "completed"
-              ? "bg-green-500"
-              : transfer.status === "error"
-                ? "bg-red-500"
-                : animateProgress
-                  ? "pulse-animation bg-blue-400"
-                  : "bg-blue-500"
-          } ${transfer.status === "transferring" ? "progress-shimmer" : ""}`}
-          style={{ width: `${transfer.progress}%` }}
+          className={
+            "h-full bg-blue-500 transition-all duration-200 motion-reduce:transition-none"
+          }
+          style={{ width: transfer.progress + "%" }}
         />
       </div>
     </div>
   );
-};
+}
